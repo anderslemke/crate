@@ -16,7 +16,7 @@ function CardBody({ track, canAdd }) {
           : ''}
       </div>
       <div className="swipe-hints muted small">
-        ← dismiss · add →{canAdd ? '' : ' (pick a playlist)'}
+        ← dismiss · tap ⏯ · add →{canAdd ? '' : ' (pick a playlist)'}
       </div>
     </>
   );
@@ -86,9 +86,16 @@ export default function Deck({ queue, onSwipe, session, onRefresh, canAdd }) {
   const onPointerUp = () => {
     if (!start.current) return;
     const dx = drag?.dx || 0;
+    const dy = drag?.dy || 0;
     start.current = null;
-    if (Math.abs(dx) > FLING_THRESHOLD) commit(dx > 0 ? 'right' : 'left');
-    else setDrag(null);
+    if (Math.abs(dx) > FLING_THRESHOLD) {
+      commit(dx > 0 ? 'right' : 'left');
+    } else {
+      // A press without movement = toggle play/pause (both player backends listen).
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8)
+        window.dispatchEvent(new Event('crate-toggle-play'));
+      setDrag(null);
+    }
   };
 
   const dx = drag?.dx || 0;

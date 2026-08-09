@@ -54,15 +54,20 @@ function EmbedPlayer({ track, next }) {
   }, [track.itemId]);
 
   useEffect(() => {
+    const toggle = () => send(track.itemId, status.paused ? 'play' : 'pause');
     const onKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if (e.key === ' ') {
         e.preventDefault();
-        send(track.itemId, status.paused ? 'play' : 'pause');
+        toggle();
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('crate-toggle-play', toggle);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('crate-toggle-play', toggle);
+    };
   });
 
   const embeds = [track, next].filter(Boolean);
@@ -188,7 +193,11 @@ export default function Player({ track, next, controls }) {
       else if (e.key === '.') seekTo(pos + 10);
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('crate-toggle-play', toggle);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('crate-toggle-play', toggle);
+    };
   });
 
   // Both in-app backends refused (app not production-approved yet):
