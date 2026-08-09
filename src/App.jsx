@@ -79,40 +79,50 @@ export default function App() {
   };
 
   // dir: 'left' (dismiss) | 'right' (add to target)
+  // Optimistic: the deck advances instantly; Tidal calls run in the
+  // background and a failure puts the card back on top.
   const swipe = useCallback(
-    async (dir) => {
+    (dir) => {
       const item = queue[0];
-      if (!item || busy) return;
+      if (!item) return;
       if (dir === 'right' && !targetId) {
         setErr('Pick a target playlist first');
         return;
       }
-      setBusy(true);
       setErr('');
+      setQueue((q) => q.slice(1));
+      setSession((s) =>
+        dir === 'right'
+          ? { ...s, added: s.added + 1 }
+          : { ...s, dismissed: s.dismissed + 1 },
+      );
+      setUndoStack((u) => [{ item, dir, targetId }, ...u].slice(0, 10));
       const c = credsRef.current;
-      try {
-        if (dir === 'right') {
-          try {
-            await addToPlaylist(c, targetId, item.trackId);
-          } catch (e) {
-            // Already in the target playlist counts as success.
-            if (e.status !== 409 && e.status !== 400) throw e;
+      (async () => {
+        try {
+          if (dir === 'right') {
+            try {
+              await addToPlaylist(c, targetId, item.trackId);
+            } catch (e) {
+              // Already in the target playlist counts as success.
+              if (e.status !== 409 && e.status !== 400) throw e;
+            }
           }
+          await removeFromPlaylist(c, inbox.id, item);
+        } catch (e) {
+          // Revert: card back on top, counters and undo history unwound.
+          setErr(`${item.title}: ${String(e.message || e)}`);
+          setQueue((q) => [item, ...q]);
+          setSession((s) =>
+            dir === 'right'
+              ? { ...s, added: Math.max(0, s.added - 1) }
+              : { ...s, dismissed: Math.max(0, s.dismissed - 1) },
+          );
+          setUndoStack((u) => u.filter((x) => x.item.itemId !== item.itemId));
         }
-        await removeFromPlaylist(c, inbox.id, item);
-        setQueue((q) => q.slice(1));
-        setSession((s) =>
-          dir === 'right'
-            ? { ...s, added: s.added + 1 }
-            : { ...s, dismissed: s.dismissed + 1 },
-        );
-        setUndoStack((u) => [{ item, dir, targetId }, ...u].slice(0, 10));
-      } catch (e) {
-        setErr(String(e.message || e));
-      }
-      setBusy(false);
+      })();
     },
-    [queue, busy, targetId, inbox],
+    [queue, targetId, inbox],
   );
 
   const undo = useCallback(async () => {
@@ -152,9 +162,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-      if (e.key === 'ArrowLeft') swipe('left');
-      else if (e.key === 'ArrowRight') swipe('right');
-      else if (e.key === 'z' && (e.metaKey || e.ctrlKey)) undo();
+      if (e.key === 'z' && (e.metaKey || e.ctrlKey)) undo();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -180,13 +188,14 @@ export default function App() {
         <>
           <Deck
             queue={queue}
-            busy={busy}
             onSwipe={swipe}
             session={session}
             onRefresh={refresh}
             canAdd={!!targetId}
           />
-          {queue[0] && <Player track={queue[0]} controls={playerControls} />}
+          {queue[0] && (
+            <Player track={queue[0]} next={queue[1]} controls={playerControls} />
+          )}
           {undoStack.length > 0 && (
             <button className="secondary undo" onClick={undo} disabled={busy}>
               ↩︎ Undo {undoStack[0].dir === 'right' ? 'add' : 'dismiss'}

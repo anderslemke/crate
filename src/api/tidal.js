@@ -222,6 +222,12 @@ export function autoStart(duration) {
   return Math.max(0, Math.min(Math.round(duration * 0.25), 45) + bias);
 }
 
+// Once both playback paths have 403'd (dev-mode app awaiting production
+// approval), stop probing per card — the UI drops to embed mode for the rest
+// of the session.
+let gated = false;
+export const isPlaybackGated = () => gated;
+
 // 30s-preview fallback, bypassing the player SDK: dev-mode apps get 403 on
 // FULL playbackinfo, but PREVIEW manifests may still be served. Previews are
 // plain unencrypted AAC, so a bare <audio> element can play them.
@@ -276,6 +282,7 @@ export async function loadAndPlay(trackId, startSeconds) {
       return 'preview';
     } catch (e2) {
       console.error('[crate] preview fallback failed too:', e2);
+      gated = true;
       throw e;
     }
   }

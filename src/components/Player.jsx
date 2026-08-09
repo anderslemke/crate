@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { autoStart, loadAndPlay } from '../api/tidal.js';
+import { autoStart, isPlaybackGated, loadAndPlay } from '../api/tidal.js';
 
 const fmt = (s) =>
   `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
-export default function Player({ track, controls }) {
+export default function Player({ track, next, controls }) {
   const [pos, setPos] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -13,8 +13,14 @@ export default function Player({ track, controls }) {
   // Preview clips are ~30s regardless of the track's real length.
   const duration = preview ? 30 : track.duration || 0;
 
-  // Auto-play each new card from the skip-intro position.
+  // Auto-play each new card from the skip-intro position — unless playback
+  // is known to be gated, in which case we stay in embed mode without the
+  // 403 round-trips (keeps the preloaded iframes mounted).
   useEffect(() => {
+    if (isPlaybackGated()) {
+      setLoadErr('gated');
+      return undefined;
+    }
     let cancelled = false;
     setLoadErr('');
     setPos(autoStart(duration));
@@ -80,16 +86,22 @@ export default function Player({ track, controls }) {
 
   // Both in-app backends refused (app not production-approved yet):
   // fall back to Tidal's official embed widget — plays previews with one tap.
+  // The next card's iframe is kept mounted (hidden) so advancing the deck
+  // swaps players instantly instead of loading from scratch.
   if (loadErr) {
+    const embeds = [track, next].filter(Boolean);
     return (
       <div className="player card">
-        <iframe
-          className="embed"
-          title="Tidal player"
-          src={`https://embed.tidal.com/tracks/${track.trackId}`}
-          allow="encrypted-media; autoplay"
-          loading="lazy"
-        />
+        {embeds.map((t) => (
+          <iframe
+            key={t.itemId}
+            className="embed"
+            style={t === track ? undefined : { display: 'none' }}
+            title={`Tidal player ${t.title}`}
+            src={`https://embed.tidal.com/tracks/${t.trackId}`}
+            allow="encrypted-media; autoplay"
+          />
+        ))}
         <div className="row">
           <a className="small" href={`tidal://track/${track.trackId}`}>
             ▶ Open in Tidal app

@@ -94,10 +94,13 @@ code { font-size: 13px; word-break: break-all; }
   padding: 16px;
 }
 
-.deck { position: relative; display: flex; flex-direction: column; gap: 12px; }
+.deck { display: flex; flex-direction: column; gap: 12px; }
+
+.deck-stack { position: relative; height: 224px; }
 
 .track-card {
-  min-height: 200px;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -106,20 +109,33 @@ code { font-size: 13px; word-break: break-all; }
   touch-action: pan-y;
   user-select: none;
   -webkit-user-select: none;
-  position: relative;
   cursor: grab;
+  transition: transform 0.18s ease-out, opacity 0.18s ease-out;
+  will-change: transform;
 }
 .track-card.behind {
-  position: absolute;
-  top: 6px; left: 8px; right: 8px;
-  min-height: 200px;
-  opacity: 0.5;
-  transform: scale(0.96);
-  z-index: 0;
+  opacity: 0.55;
+  transform: scale(0.955) translateY(10px);
+  z-index: 1;
 }
-.track-card.top { z-index: 1; }
+.track-card.top { z-index: 2; }
 .track-card.add { border-color: #4ade80; }
 .track-card.dismiss { border-color: #f87171; }
+
+.track-card.fling-left, .track-card.fling-right {
+  z-index: 3;
+  pointer-events: none;
+  animation: 0.22s ease-in forwards;
+}
+.track-card.fling-left { animation-name: fling-left; }
+.track-card.fling-right { animation-name: fling-right; }
+
+@keyframes fling-left {
+  to { transform: translateX(-120vw) rotate(-20deg); opacity: 0.3; }
+}
+@keyframes fling-right {
+  to { transform: translateX(120vw) rotate(20deg); opacity: 0.3; }
+}
 
 .track-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
 .track-artist { font-size: 18px; color: #c9c9d4; }
