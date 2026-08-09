@@ -7,10 +7,10 @@ import {
 } from '@tidal-music/auth';
 import * as Player from '@tidal-music/player';
 
-// Client ID is public by design (PKCE flow, no secret). Paste it once in the
-// app's setup screen; it's kept in localStorage so the deployed build carries
-// no config.
-export const getClientId = () => localStorage.getItem('crate_client_id') || '';
+// Client ID is public by design (PKCE flow, no secret in the browser).
+// localStorage can override it, e.g. to point at another Tidal app.
+const CLIENT_ID = 'kme2TJ7OPFP0qDSQ';
+export const getClientId = () => localStorage.getItem('crate_client_id') || CLIENT_ID;
 export const setClientId = (id) => localStorage.setItem('crate_client_id', id.trim());
 
 const SCOPES = ['user.read', 'playlists.read', 'playlists.write', 'playback'];
