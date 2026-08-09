@@ -259,6 +259,8 @@ function withTimeout(promise, what, ms = LOAD_TIMEOUT) {
   });
 }
 
+const msg = (e) => String(e?.message || e || 'unknown');
+
 // Autoplay policy, not a broken player: the audio is loaded and one user
 // gesture away from playing. Never a reason to fall back or to give up.
 // Chrome words it "the user didn't interact with the document first", Safari
@@ -273,6 +275,14 @@ const isAutoplayBlocked = (e) =>
 // the only failure worth latching for the session — everything else is worth
 // retrying on the next card.
 const isAuthGated = (e) => /\b(401|403)\b/.test(String(e?.message || e));
+
+// The SDK can't run at all in some browsers — iOS Safari has no MediaSource,
+// so the player never gets an active instance and every call comes back "No
+// active player". That's a capability, not a blip: stop paying two loads and
+// two timeouts per card to rediscover it.
+let sdkUnavailable = false;
+const isSdkUnavailable = (e) =>
+  /no active player|mediasource|not supported|unsupported/i.test(String(e?.message || e));
 
 // Start position heuristic: skip the intro, land around the first verse/chorus.
 // 25% in, capped at 45s; short tracks start from the top. `crate_start_bias`
@@ -298,14 +308,43 @@ let loadSeq = 0;
 // 30s-preview fallback, bypassing the player SDK: dev-mode apps get 403 on
 // FULL playbackinfo, but PREVIEW manifests may still be served. Previews are
 // plain unencrypted AAC, so a bare <audio> element can play them.
+//
+// One element for the whole session, deliberately: iOS only ever lets an
+// element play programmatically after that element has been started from a
+// real user gesture. A fresh `new Audio()` per card is locked every time —
+// this one gets unlocked on the first tap and stays unlocked.
 let audioEl = null;
+let previewActive = false; // is the clip the live backend right now?
+let unlocked = false;
+
+// 44-byte WAV, zero samples.
+const SILENCE =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
+
+function ensureAudioEl() {
+  if (!audioEl) {
+    audioEl = new Audio();
+    audioEl.playsInline = true;
+    audioEl.preload = 'auto';
+  }
+  return audioEl;
+}
+
+// Must be called synchronously from a user-gesture handler — one await first
+// and iOS considers the gesture spent. Playing silence is enough to mark the
+// element as user-started.
+export function unlockPreviewAudio() {
+  if (unlocked || previewActive) return;
+  const el = ensureAudioEl();
+  el.src = SILENCE;
+  unlocked = true;
+  const p = el.play();
+  if (p?.catch) p.catch(() => { unlocked = false; });
+}
 
 function stopPreviewAudio() {
-  if (audioEl) {
-    audioEl.pause();
-    audioEl.removeAttribute('src');
-    audioEl = null;
-  }
+  previewActive = false;
+  if (audioEl) quiet(() => audioEl.pause());
 }
 
 async function playPreviewClip(trackId) {
@@ -319,13 +358,19 @@ async function playPreviewClip(trackId) {
   const manifest = JSON.parse(atob(info.manifest));
   const url = manifest.urls?.[0];
   if (!url) throw new Error(`no url in ${info.manifestMimeType} manifest`);
-  stopPreviewAudio();
-  audioEl = new Audio(url);
+  const el = ensureAudioEl();
+  // Claim the element before awaiting: a gesture landing mid-load must not
+  // overwrite this src with the unlock silence.
+  previewActive = true;
+  el.src = url;
   try {
-    await audioEl.play();
+    await el.play();
   } catch (e) {
-    // Keep the element around: the src is loaded, so ▶ starts it instantly.
-    if (!isAutoplayBlocked(e)) throw e;
+    if (!isAutoplayBlocked(e)) {
+      previewActive = false;
+      throw e;
+    }
+    // The src is loaded, so ▶ starts it instantly.
     return { mode: 'preview', blocked: true };
   }
   return { mode: 'preview' };
@@ -369,13 +414,17 @@ async function loadFullTrack(trackId, startSeconds, stale) {
 export async function loadAndPlay(trackId, startSeconds) {
   const seq = ++loadSeq;
   const stale = () => seq !== loadSeq;
-  let fullErr;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let fullErr = sdkUnavailable ? new Error('player SDK unavailable in this browser') : null;
+  for (let attempt = 0; !sdkUnavailable && attempt < 2; attempt++) {
     try {
       return await loadFullTrack(trackId, startSeconds, stale);
     } catch (e) {
       if (stale()) return { stale: true };
       fullErr = e;
+      if (isSdkUnavailable(e)) {
+        sdkUnavailable = true;
+        break;
+      }
       if (isAuthGated(e) || attempt === 1) break;
       console.warn('[crate] full-track load failed, retrying:', e);
     }
@@ -392,7 +441,8 @@ export async function loadAndPlay(trackId, startSeconds) {
     if (stale()) return { stale: true };
     console.error('[crate] preview fallback failed too:', e2);
     if (isAuthGated(fullErr) && isAuthGated(e2)) gated = true;
-    throw fullErr;
+    // Both reasons, because either one alone sends you down the wrong path.
+    throw new Error(`full: ${msg(fullErr)} · preview: ${msg(e2)}`);
   }
 }
 
@@ -416,21 +466,22 @@ export const playerControls = {
   // reason it refused for, and a click handler is a bad place to explode.
   play: () => {
     try {
-      return Promise.resolve(audioEl ? audioEl.play() : Player.play());
+      return Promise.resolve(previewActive ? audioEl.play() : Player.play());
     } catch (e) {
       return Promise.reject(e);
     }
   },
-  pause: () => quiet(() => (audioEl ? audioEl.pause() : Player.pause())),
+  pause: () => quiet(() => (previewActive ? audioEl.pause() : Player.pause())),
   seek: (s) =>
     quiet(() => {
-      if (audioEl) audioEl.currentTime = Math.max(0, s);
+      if (previewActive) audioEl.currentTime = Math.max(0, s);
       else Player.seek(Math.max(0, s));
     }),
-  position: () => quiet(() => (audioEl ? audioEl.currentTime : Player.getAssetPosition()), 0) || 0,
+  position: () =>
+    quiet(() => (previewActive ? audioEl.currentTime : Player.getAssetPosition()), 0) || 0,
   state: () =>
     quiet(() => {
-      if (audioEl) return audioEl.paused ? 'NOT_PLAYING' : 'PLAYING';
+      if (previewActive) return audioEl.paused ? 'NOT_PLAYING' : 'PLAYING';
       return Player.getPlaybackState();
     }, 'NOT_PLAYING'),
   // Also cancels any in-flight load, so the card being swiped away can't

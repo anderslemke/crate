@@ -50,9 +50,11 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
 
   // Card change: silence the outgoing embed; start the incoming one only if
   // the user was in a playing state. (The swipe itself is the user gesture
-  // that lets autoplay through.)
+  // that lets autoplay through.) Show it as paused until a broadcast says
+  // otherwise — on iOS the play command is ignored, and claiming ⏸ over a
+  // silent embed is worse than a stale ▶ for a moment.
   useEffect(() => {
-    setStatus({ currentTime: 0, duration: 30, paused: !wantPlay.current });
+    setStatus({ currentTime: 0, duration: 30, paused: true });
     for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
     if (wantPlay.current) send(track.itemId, 'play');
   }, [track.itemId]);
@@ -127,7 +129,7 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
       </div>
       {/* Why you're looking at an iframe instead of the real player. */}
       <div className="row muted small">
-        <span className="embed-reason">Embed mode — {String(reason).slice(0, 120)}</span>
+        <span className="embed-reason">Embed mode — {String(reason).slice(0, 200)}</span>
         {onRetry && (
           <button className="secondary compact right" onClick={onRetry}>
             ↻ Retry

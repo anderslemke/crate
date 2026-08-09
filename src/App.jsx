@@ -10,6 +10,7 @@ import {
   removeFromPlaylist,
   createPlaylist,
   playerControls,
+  unlockPreviewAudio,
 } from './api/tidal.js';
 import TidalLogin from './components/TidalLogin.jsx';
 import PlaylistPicker from './components/PlaylistPicker.jsx';
@@ -172,6 +173,19 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [swipe, undo]);
+
+  // iOS won't play audio this app started on its own — but it will play audio
+  // from an element that a real tap once started. Spend the first tap of the
+  // session unlocking it (capture phase, before anything can stop it).
+  useEffect(() => {
+    const unlock = () => unlockPreviewAudio();
+    window.addEventListener('pointerdown', unlock, true);
+    window.addEventListener('keydown', unlock, true);
+    return () => {
+      window.removeEventListener('pointerdown', unlock, true);
+      window.removeEventListener('keydown', unlock, true);
+    };
+  }, []);
 
   if (stage === 'boot') return <div className="app center muted">…</div>;
   if (stage === 'setup' || stage === 'login')
