@@ -79,13 +79,15 @@ export default function Player({ track, controls }) {
 
   return (
     <div className="player card">
-      {preview && (
-        <div className="muted small">
-          30s preview mode ·{' '}
-          <a href={`tidal://track/${track.trackId}`}>open in Tidal</a>
-        </div>
+      {preview && <div className="muted small">30s preview mode</div>}
+      {loadErr && (
+        <div className="error small">No playback: {loadErr.slice(0, 80)}</div>
       )}
-      {loadErr && <div className="error small">{loadErr}</div>}
+      {(preview || loadErr) && (
+        <a className="small" href={`tidal://track/${track.trackId}`}>
+          ▶ Open in Tidal app
+        </a>
+      )}
       <div className="progress-bar tall" ref={barRef} onPointerDown={onBar}>
         <div
           className="progress-bar-fill"
