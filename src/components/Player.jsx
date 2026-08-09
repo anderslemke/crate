@@ -26,15 +26,20 @@ export default function Player({ track, next, inboxId }) {
           allow="autoplay *; encrypted-media *; fullscreen *; web-share *;"
         />
       ))}
-      {/* The native app is the one thing that reliably plays on a phone: the
-          track for a quick listen, the inbox to put this whole review session
-          on in the background and just swipe along. */}
+      {/* The native app is the one thing that plays on a phone: the track for
+          a quick listen, the inbox to put the whole review session on in the
+          background and just swipe along.
+
+          These are https universal links, not the tidal:// scheme — iOS
+          refuses custom schemes from an ordinary link in enough cases to be
+          useless, and https is what the embed's own cover art uses, which is
+          the one link that has been observed to open the app from here. */}
       <div className="row player-links">
-        <a className="applink" href={`tidal://track/${track.trackId}`}>
+        <a className="applink" href={`https://tidal.com/track/${track.trackId}`}>
           ▶ This track in Tidal
         </a>
         {inboxId && (
-          <a className="applink right" href={`tidal://playlist/${inboxId}`}>
+          <a className="applink right" href={`https://tidal.com/playlist/${inboxId}`}>
             Inbox in Tidal
           </a>
         )}
