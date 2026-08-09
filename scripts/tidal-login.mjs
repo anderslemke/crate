@@ -1,20 +1,32 @@
 #!/usr/bin/env node
 // One-time CLI login for the pool-add script.
 // PKCE + loopback redirect: register http://127.0.0.1:8477/callback as a
-// redirect URI on the Tidal app. Saves tokens to .tidal-tokens.json (gitignored).
+// redirect URI on the Tidal app.
+//
+// Tokens are saved to ~/.config/crate/tidal-tokens.json (override with
+// TIDAL_TOKENS_PATH) so the same script works from any checkout/machine.
+// On a headless box, tunnel the callback port from a machine with a browser
+// (ssh -f -N -L 8477:127.0.0.1:8477 <box>) and open the printed URL there.
 //
 // Usage: TIDAL_CLIENT_ID=xxx node scripts/tidal-login.mjs
-//        (or put TIDAL_CLIENT_ID=xxx in .env.local)
+//        (or put TIDAL_CLIENT_ID=xxx in .env.local next to this script's parent)
 
 import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-export const TOKENS_PATH = join(root, '.tidal-tokens.json');
+export const TOKENS_PATH =
+  process.env.TIDAL_TOKENS_PATH ||
+  join(
+    process.env.XDG_CONFIG_HOME || join(homedir(), '.config'),
+    'crate',
+    'tidal-tokens.json',
+  );
 
 export function loadClientId() {
   if (process.env.TIDAL_CLIENT_ID) return process.env.TIDAL_CLIENT_ID;
@@ -86,6 +98,7 @@ async function main() {
 }
 
 export function saveTokens(clientId, tok) {
+  mkdirSync(dirname(TOKENS_PATH), { recursive: true });
   writeFileSync(
     TOKENS_PATH,
     JSON.stringify(
@@ -108,7 +121,7 @@ export async function getToken() {
   try {
     t = JSON.parse(readFileSync(TOKENS_PATH, 'utf8'));
   } catch {
-    console.error('No .tidal-tokens.json — run: node scripts/tidal-login.mjs');
+    console.error(`No tokens at ${TOKENS_PATH} — run: node scripts/tidal-login.mjs`);
     process.exit(1);
   }
   if (Date.now() < t.expiresAt - 60_000) return t;

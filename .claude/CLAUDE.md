@@ -31,11 +31,13 @@ pipe them through the script, report the summary + anything that missed.
 
 ## Auth for the scripts
 
-- `.tidal-tokens.json` (gitignored) holds user tokens; `pool-add.mjs` refreshes
-  them automatically.
+- `~/.config/crate/tidal-tokens.json` holds user tokens; `pool-add.mjs`
+  refreshes them automatically. (Override path with `TIDAL_TOKENS_PATH`.)
 - If it's missing or refresh fails: run `node scripts/tidal-login.mjs` — this
   needs Anders at the browser, so ask him to run it if you're unattended.
-- `TIDAL_CLIENT_ID` lives in `.env.local` (gitignored). Never commit either file.
+- `TIDAL_CLIENT_ID` lives in `.env.local` (gitignored). Never commit secrets.
+- The scripts are vendored into the `home` repo (`pac/skills/crate-add/`) so
+  pac on the Pi can feed the inbox too — keep copies in sync when editing them.
 
 ## The web app
 
