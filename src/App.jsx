@@ -4,7 +4,7 @@ import {
   initTidal,
   handleLoginRedirect,
   getUserCredentials,
-  ensureInbox,
+  ensureCratePlaylists,
   getPlaylistItems,
   addToPlaylist,
   removeFromPlaylist,
@@ -20,6 +20,7 @@ export default function App() {
   const [stage, setStage] = useState('boot'); // boot | setup | login | loading | ready
   const [creds, setCreds] = useState(null);
   const [inbox, setInbox] = useState(null);
+  const [dismissedList, setDismissedList] = useState(null);
   const [playlists, setPlaylists] = useState([]);
   const [targetId, setTargetId] = useState(localStorage.getItem('crate_playlist') || '');
   const [queue, setQueue] = useState([]); // pending items, [0] is the open card
@@ -40,8 +41,9 @@ export default function App() {
       if (!c) return setStage('login');
       setCreds(c);
       setStage('loading');
-      const { inbox: ib, playlists: pls } = await ensureInbox(c);
+      const { inbox: ib, dismissed: dl, playlists: pls } = await ensureCratePlaylists(c);
       setInbox(ib);
+      setDismissedList(dl);
       setPlaylists(pls);
       const items = await getPlaylistItems(c, ib.id);
       setQueue(items);
@@ -89,6 +91,9 @@ export default function App() {
         setErr('Pick a target playlist first');
         return;
       }
+      // Right files the track in the target playlist, left in the dismissed
+      // one; either way it leaves the inbox afterwards.
+      const listId = dir === 'right' ? targetId : dismissedList?.id;
       setErr('');
       setQueue((q) => q.slice(1));
       setSession((s) =>
@@ -96,15 +101,15 @@ export default function App() {
           ? { ...s, added: s.added + 1 }
           : { ...s, dismissed: s.dismissed + 1 },
       );
-      setUndoStack((u) => [{ item, dir, targetId }, ...u].slice(0, 10));
+      setUndoStack((u) => [{ item, dir, listId }, ...u].slice(0, 10));
       const c = credsRef.current;
       (async () => {
         try {
-          if (dir === 'right') {
+          if (listId) {
             try {
-              await addToPlaylist(c, targetId, item.trackId);
+              await addToPlaylist(c, listId, item.trackId);
             } catch (e) {
-              // Already in the target playlist counts as success.
+              // Already in that playlist counts as success.
               if (e.status !== 409 && e.status !== 400) throw e;
             }
           }
@@ -122,7 +127,7 @@ export default function App() {
         }
       })();
     },
-    [queue, targetId, inbox],
+    [queue, targetId, inbox, dismissedList],
   );
 
   const undo = useCallback(async () => {
@@ -133,14 +138,14 @@ export default function App() {
     const c = credsRef.current;
     try {
       await addToPlaylist(c, inbox.id, last.item.trackId);
-      if (last.dir === 'right') {
-        // Best effort: pull it back out of the target playlist.
+      if (last.listId) {
+        // Best effort: pull it back out of wherever the swipe filed it.
         try {
-          const items = await getPlaylistItems(c, last.targetId);
+          const items = await getPlaylistItems(c, last.listId);
           const found = items.find((i) => i.trackId === last.item.trackId);
-          if (found) await removeFromPlaylist(c, last.targetId, found);
+          if (found) await removeFromPlaylist(c, last.listId, found);
         } catch {
-          /* leave it in the target; inbox re-add is what matters */
+          /* leave it there; the inbox re-add is what matters */
         }
       }
       // itemId changed on re-add; refetch to stay consistent.

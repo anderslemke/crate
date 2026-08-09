@@ -18,6 +18,7 @@ const SCOPES = ['user.read', 'playlists.read', 'playlists.write', 'playback'];
 const API = 'https://openapi.tidal.com/v2';
 const COUNTRY = 'DK';
 export const INBOX_NAME = 'Crate Inbox';
+export const DISMISSED_NAME = 'Crate Dismissed';
 
 const redirectUri = () => window.location.origin + import.meta.env.BASE_URL;
 
@@ -170,15 +171,34 @@ export async function removeFromPlaylist(creds, playlistId, item) {
   });
 }
 
-export async function ensureInbox(creds) {
-  const cached = localStorage.getItem('crate_inbox');
-  const playlists = await getMyPlaylists(creds);
+// One of Crate's own playlists: found by cached id first (so a rename in
+// Tidal doesn't orphan it), then by name, and created if it's missing.
+async function ensureOwnPlaylist(creds, playlists, name, cacheKey) {
+  const cached = localStorage.getItem(cacheKey);
   const found =
     (cached && playlists.find((p) => p.id === cached)) ||
-    playlists.find((p) => p.name === INBOX_NAME);
-  const inbox = found || (await createPlaylist(creds, INBOX_NAME));
-  localStorage.setItem('crate_inbox', inbox.id);
-  return { inbox, playlists: playlists.filter((p) => p.id !== inbox.id) };
+    playlists.find((p) => p.name === name);
+  const playlist = found || (await createPlaylist(creds, name));
+  localStorage.setItem(cacheKey, playlist.id);
+  return playlist;
+}
+
+// The two playlists Crate owns — the inbox it drains and the graveyard it
+// files dismissals in — plus the rest, which are the possible targets.
+export async function ensureCratePlaylists(creds) {
+  const playlists = await getMyPlaylists(creds);
+  const inbox = await ensureOwnPlaylist(creds, playlists, INBOX_NAME, 'crate_inbox');
+  const dismissed = await ensureOwnPlaylist(
+    creds,
+    playlists,
+    DISMISSED_NAME,
+    'crate_dismissed',
+  );
+  return {
+    inbox,
+    dismissed,
+    playlists: playlists.filter((p) => p.id !== inbox.id && p.id !== dismissed.id),
+  };
 }
 
 // --- Player ---

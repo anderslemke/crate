@@ -7,8 +7,11 @@ there is no local database:
 
 - The pool is the Tidal playlist **"Crate Inbox"**. Draining it is the app's job.
 - Target playlists are ordinary Tidal playlists, one per DJ occasion.
-- Dismissing just removes from the inbox; there is no dismiss history, so a
-  track that gets re-added will be reviewed again. That's accepted.
+- Dismissing moves the track to the playlist **"Crate Dismissed"** — that's the
+  dismiss history. Nothing reads it back yet, so a track that gets re-added to
+  the inbox will still be reviewed again.
+- Both Crate-owned playlists are created on first run and hidden from the
+  target-playlist picker.
 
 ## Adding tracks to the pool (the main agent job)
 
