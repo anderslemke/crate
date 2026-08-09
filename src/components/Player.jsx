@@ -124,17 +124,20 @@ export default function Player({ track, next, inboxId }) {
           {fmt(status.currentTime)} / {fmt(status.duration)}
         </span>
       </div>
-      {/* https universal links, not the tidal:// scheme — iOS declines custom
-          schemes from an ordinary link often enough to be useless. */}
+      {/* listen.tidal.com, not tidal.com or tidal:// — the web player is the
+          one thing confirmed to play on the phone, and it stays in Safari, so
+          coming back here is a tab switch rather than an app switch. Playing
+          the whole inbox there and swiping along in here is the workflow that
+          actually works while the embed is broken. */}
       <div className="row player-links">
-        <a className="applink" href={`https://tidal.com/track/${track.trackId}`}>
-          ▶ This track in Tidal
-        </a>
         {inboxId && (
-          <a className="applink right" href={`https://tidal.com/playlist/${inboxId}`}>
-            Inbox in Tidal
+          <a className="applink primary" href={`https://listen.tidal.com/playlist/${inboxId}`}>
+            ▶ Play inbox in Tidal
           </a>
         )}
+        <a className="applink right" href={`https://listen.tidal.com/track/${track.trackId}`}>
+          This track
+        </a>
       </div>
     </div>
   );
