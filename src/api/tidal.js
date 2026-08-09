@@ -6,6 +6,7 @@ import {
   credentialsProvider,
 } from '@tidal-music/auth';
 import * as Player from '@tidal-music/player';
+import * as EventProducer from '@tidal-music/event-producer';
 
 // Client ID is public by design (PKCE flow, no secret in the browser).
 // localStorage can override it, e.g. to point at another Tidal app.
@@ -182,12 +183,34 @@ export async function ensureInbox(creds) {
 
 // --- Player ---
 
-let playerReady = false;
+let playerReady = null;
 
+// The player refuses to play without an event sender (play-logging is
+// mandatory); wire up the official event producer against Tidal's collector.
 export function initPlayer() {
-  if (playerReady) return;
-  Player.setCredentialsProvider(credentialsProvider);
-  playerReady = true;
+  if (!playerReady) {
+    playerReady = (async () => {
+      await EventProducer.init({
+        appInfo: { appName: 'Crate', appVersion: '0.1.0' },
+        blockedConsentCategories: {
+          NECESSARY: false,
+          PERFORMANCE: false,
+          TARGETING: true,
+        },
+        credentialsProvider,
+        platform: {
+          browserName: navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Chromium',
+          browserVersion: 'unknown',
+          osName: navigator.platform || 'unknown',
+        },
+        tlConsumerUri: 'https://ec.tidal.com/api/event-batch',
+        tlPublicConsumerUri: 'https://ec.tidal.com/api/public/event-batch',
+      });
+      Player.setCredentialsProvider(credentialsProvider);
+      Player.setEventSender(EventProducer);
+    })();
+  }
+  return playerReady;
 }
 
 // Start position heuristic: skip the intro, land around the first verse/chorus.
@@ -204,7 +227,7 @@ export function autoStart(duration) {
 // production-approved, or DRM unsupported in this browser). Throws only if
 // both fail — with the original full-track error, which is the useful one.
 export async function loadAndPlay(trackId, startSeconds) {
-  initPlayer();
+  await initPlayer();
   const media = (productType) => ({
     productId: String(trackId),
     productType,
