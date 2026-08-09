@@ -10,7 +10,8 @@ export default function Player({ track, controls }) {
   const [preview, setPreview] = useState(false);
   const [loadErr, setLoadErr] = useState('');
   const barRef = useRef(null);
-  const duration = track.duration || 0;
+  // Preview clips are ~30s regardless of the track's real length.
+  const duration = preview ? 30 : track.duration || 0;
 
   // Auto-play each new card from the skip-intro position.
   useEffect(() => {
@@ -32,7 +33,7 @@ export default function Player({ track, controls }) {
     })();
     return () => {
       cancelled = true;
-      controls.pause();
+      controls.stop();
     };
   }, [track.trackId]); // eslint-disable-line react-hooks/exhaustive-deps
 

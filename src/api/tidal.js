@@ -222,41 +222,81 @@ export function autoStart(duration) {
   return Math.max(0, Math.min(Math.round(duration * 0.25), 45) + bias);
 }
 
+// 30s-preview fallback, bypassing the player SDK: dev-mode apps get 403 on
+// FULL playbackinfo, but PREVIEW manifests may still be served. Previews are
+// plain unencrypted AAC, so a bare <audio> element can play them.
+let audioEl = null;
+
+function stopPreviewAudio() {
+  if (audioEl) {
+    audioEl.pause();
+    audioEl.removeAttribute('src');
+    audioEl = null;
+  }
+}
+
+async function playPreviewClip(trackId) {
+  const creds = await credentialsProvider.getCredentials();
+  const r = await fetch(
+    `https://api.tidal.com/v1/tracks/${trackId}/playbackinfo?audioquality=LOW&playbackmode=STREAM&assetpresentation=PREVIEW`,
+    { headers: { Authorization: `Bearer ${creds.token}` } },
+  );
+  if (!r.ok) throw new Error(`preview playbackinfo: ${r.status}`);
+  const info = await r.json();
+  const manifest = JSON.parse(atob(info.manifest));
+  const url = manifest.urls?.[0];
+  if (!url) throw new Error(`no url in ${info.manifestMimeType} manifest`);
+  stopPreviewAudio();
+  audioEl = new Audio(url);
+  await audioEl.play();
+}
+
 // Loads and starts playback. Returns 'full' when the real track plays,
-// 'preview' when we had to fall back to the 30s demo clip (app not yet
-// production-approved, or DRM unsupported in this browser). Throws only if
-// both fail — with the original full-track error, which is the useful one.
+// 'preview' on the 30s-clip fallback. Throws only if both fail — with the
+// original full-track error, which is the useful one.
 export async function loadAndPlay(trackId, startSeconds) {
   await initPlayer();
-  const media = (productType) => ({
-    productId: String(trackId),
-    productType,
-    sourceId: 'crate',
-    sourceType: 'OTHER',
-  });
   try {
-    await Player.load(media('track'), startSeconds);
+    await Player.load(
+      {
+        productId: String(trackId),
+        productType: 'track',
+        sourceId: 'crate',
+        sourceType: 'OTHER',
+      },
+      startSeconds,
+    );
     await Player.play();
+    stopPreviewAudio();
     return 'full';
   } catch (e) {
     console.error('[crate] full-track load failed:', e);
     try {
-      await Player.load(media('demo'), 0); // previews are 30s; start at 0
-      await Player.play();
+      await playPreviewClip(trackId);
       return 'preview';
     } catch (e2) {
-      console.error('[crate] demo load failed too:', e2);
+      console.error('[crate] preview fallback failed too:', e2);
       throw e;
     }
   }
 }
 
+// Controls route to whichever backend is active: the SDK player for full
+// tracks, or the fallback <audio> element for 30s previews.
 export const playerControls = {
-  play: () => Player.play(),
-  pause: () => Player.pause(),
-  seek: (s) => Player.seek(Math.max(0, s)),
-  position: () => Player.getAssetPosition(),
-  state: () => Player.getPlaybackState(),
-  events: Player.events,
-  reset: () => Player.reset(),
+  play: () => (audioEl ? audioEl.play() : Player.play()),
+  pause: () => (audioEl ? audioEl.pause() : Player.pause()),
+  seek: (s) => {
+    if (audioEl) audioEl.currentTime = Math.max(0, s);
+    else Player.seek(Math.max(0, s));
+  },
+  position: () => (audioEl ? audioEl.currentTime : Player.getAssetPosition()),
+  state: () => {
+    if (audioEl) return audioEl.paused ? 'NOT_PLAYING' : 'PLAYING';
+    return Player.getPlaybackState();
+  },
+  stop: () => {
+    stopPreviewAudio();
+    Player.pause();
+  },
 };
