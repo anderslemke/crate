@@ -199,18 +199,33 @@ export function autoStart(duration) {
   return Math.max(0, Math.min(Math.round(duration * 0.25), 45) + bias);
 }
 
+// Loads and starts playback. Returns 'full' when the real track plays,
+// 'preview' when we had to fall back to the 30s demo clip (app not yet
+// production-approved, or DRM unsupported in this browser). Throws only if
+// both fail — with the original full-track error, which is the useful one.
 export async function loadAndPlay(trackId, startSeconds) {
   initPlayer();
-  await Player.load(
-    {
-      productId: String(trackId),
-      productType: 'track',
-      sourceId: 'crate',
-      sourceType: 'OTHER',
-    },
-    startSeconds,
-  );
-  await Player.play();
+  const media = (productType) => ({
+    productId: String(trackId),
+    productType,
+    sourceId: 'crate',
+    sourceType: 'OTHER',
+  });
+  try {
+    await Player.load(media('track'), startSeconds);
+    await Player.play();
+    return 'full';
+  } catch (e) {
+    console.error('[crate] full-track load failed:', e);
+    try {
+      await Player.load(media('demo'), 0); // previews are 30s; start at 0
+      await Player.play();
+      return 'preview';
+    } catch (e2) {
+      console.error('[crate] demo load failed too:', e2);
+      throw e;
+    }
+  }
 }
 
 export const playerControls = {

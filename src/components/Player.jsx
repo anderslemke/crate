@@ -19,15 +19,15 @@ export default function Player({ track, controls }) {
     setPos(autoStart(duration));
     (async () => {
       try {
-        await loadAndPlay(track.trackId, autoStart(duration));
-        if (!cancelled) setPlaying(true);
+        const mode = await loadAndPlay(track.trackId, autoStart(duration));
+        if (cancelled) return;
+        setPreview(mode === 'preview');
+        setPlaying(true);
       } catch (e) {
         if (cancelled) return;
         setPlaying(false);
-        const msg = String(e?.message || e);
-        // Entitlement/rights failures → likely preview-only (pre-production app)
-        if (/not.?allowed|entitle|right|forbidden|403/i.test(msg)) setPreview(true);
-        else setLoadErr(msg);
+        setPreview(false);
+        setLoadErr(String(e?.message || e));
       }
     })();
     return () => {
@@ -58,7 +58,7 @@ export default function Player({ track, controls }) {
 
   const toggle = () => {
     if (controls.state() === 'PLAYING') controls.pause();
-    else controls.play();
+    else Promise.resolve(controls.play()).catch((e) => setLoadErr(String(e?.message || e)));
   };
 
   // Keyboard: space toggles, 1-4 jump, ,/. nudge ±10s
