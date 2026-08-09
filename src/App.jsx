@@ -198,7 +198,9 @@ export default function App() {
             onRefresh={refresh}
             canAdd={!!targetId}
           />
-          {queue[0] && <Player track={queue[0]} next={queue[1]} />}
+          {queue[0] && (
+            <Player track={queue[0]} next={queue[1]} inboxId={inbox?.id} />
+          )}
           {undoStack.length > 0 && (
             <button className="secondary undo" onClick={undo} disabled={busy}>
               ↩︎ Undo {undoStack[0].dir === 'right' ? 'add' : 'dismiss'}
