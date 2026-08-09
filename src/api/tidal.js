@@ -171,6 +171,46 @@ export async function removeFromPlaylist(creds, playlistId, item) {
   });
 }
 
+// --- Preview clips ---
+
+// 30s previews are plain unencrypted AAC, so a bare <audio> element plays
+// them — no SDK, no MediaSource, none of what the embed trips over.
+//
+// Two endpoints, because the obvious one is the wrong one: /playbackinfo is
+// the subscriber path and wants the internal `r_usr` scope our tokens can't
+// hold (that's the 403 we kept hitting). /playbackinfoprepaywall/v4 is what
+// Tidal's own embed server calls, for listeners who may have no subscription
+// at all. Try that first and keep the old one as a long shot.
+export async function getPreviewUrl(creds, trackId) {
+  const attempts = [
+    `playbackinfoprepaywall/v4?audioquality=LOW&assetpresentation=PREVIEW&playbackmode=STREAM`,
+    `playbackinfo?audioquality=LOW&assetpresentation=PREVIEW&playbackmode=STREAM`,
+  ];
+  let lastErr;
+  for (const q of attempts) {
+    try {
+      const r = await fetch(
+        `https://api.tidal.com/v1/tracks/${trackId}/${q}&countryCode=${COUNTRY}`,
+        { headers: { Authorization: `Bearer ${creds.token}` } },
+      );
+      if (!r.ok) {
+        lastErr = new Error(`${q.split('?')[0]}: ${r.status}`);
+        continue;
+      }
+      const info = await r.json();
+      const manifest = JSON.parse(atob(info.manifest));
+      const url = manifest.urls?.[0];
+      if (url) return url;
+      lastErr = new Error(`no url in ${info.manifestMimeType}`);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('no preview available');
+}
+
+// --- Playlists ---
+
 // One of Crate's own playlists: found by cached id first (so a rename in
 // Tidal doesn't orphan it), then by name, and created if it's missing.
 async function ensureOwnPlaylist(creds, playlists, name, cacheKey) {

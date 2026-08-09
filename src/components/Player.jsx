@@ -1,74 +1,63 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { getPreviewUrl } from '../api/tidal.js';
 
 const fmt = (s) =>
   `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
-const EMBED_ORIGIN = 'https://embed.tidal.com';
-
-// Tidal's embed, driven by postMessage — NOT by its own ▶, which does nothing
-// in this context. `{commandName: "play"|"pause"}` goes in, `{currentTime,
-// duration, paused}` comes back.
+// Playback is a 30s preview clip in a plain <audio> element.
 //
-// Nothing ever starts on its own: a card opens silent and plays when you ask
-// it to. Current and next card are both mounted, so a swipe promotes an
-// iframe that has already loaded; the outgoing one unmounts, which is what
-// stops its audio.
-export default function Player({ track, next, inboxId }) {
-  const refs = useRef(new Map());
-  const [status, setStatus] = useState({
-    currentTime: 0,
-    duration: track.duration || 30,
-    paused: true,
-  });
+// Not the embed: its play button is dead on iOS, and postMessage 'play' only
+// synthesises a click on that same dead button. Not the player SDK either.
+// listen.tidal.com plays fine on the same phone, so the platform was never
+// the problem — an ordinary <audio> tag with an unencrypted AAC url is about
+// as unobjectionable as audio gets.
+//
+// Nothing autoplays. The clip is fetched when the card opens so that the src
+// is already loaded, which means the play() on your press runs synchronously
+// inside the gesture — the only kind iOS honours.
+export default function Player({ track, next, inboxId, creds }) {
+  const audioRef = useRef(null);
+  const [src, setSrc] = useState('');
+  const [why, setWhy] = useState(''); // why there's no clip, when there isn't
+  const [playing, setPlaying] = useState(false);
+  const [pos, setPos] = useState(0);
+  const [len, setLen] = useState(30);
 
-  const send = (itemId, commandName) => {
-    refs.current
-      .get(itemId)
-      ?.contentWindow?.postMessage(JSON.stringify({ commandName }), EMBED_ORIGIN);
-  };
-
-  // Live progress from the visible embed only.
   useEffect(() => {
-    const onMsg = (e) => {
-      if (e.origin !== EMBED_ORIGIN) return;
-      if (e.source !== refs.current.get(track.itemId)?.contentWindow) return;
-      let d = e.data;
-      if (typeof d === 'string') {
-        try {
-          d = JSON.parse(d);
-        } catch {
-          return;
-        }
-      }
-      if (d && typeof d.currentTime === 'number') {
-        setStatus({
-          currentTime: d.currentTime,
-          duration: d.duration || track.duration || 30,
-          paused: !!d.paused,
-        });
-      }
+    let cancelled = false;
+    setSrc('');
+    setWhy('');
+    setPlaying(false);
+    setPos(0);
+    setLen(30);
+    getPreviewUrl(creds, track.trackId).then(
+      (url) => !cancelled && setSrc(url),
+      (e) => !cancelled && setWhy(String(e?.message || e)),
+    );
+    return () => {
+      cancelled = true;
     };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
-  }, [track.itemId]);
+  }, [track.trackId, creds]);
 
-  // Card change: back to a silent, unstarted player. The outgoing iframe
-  // unmounts on its own, which stops whatever it was playing; the incoming
-  // one is told nothing until you ask for it.
+  // Prefetch the next card's clip too, so its src is warm on arrival.
   useEffect(() => {
-    setStatus({ currentTime: 0, duration: track.duration || 30, paused: true });
-    for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
-  }, [track.itemId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (next) getPreviewUrl(creds, next.trackId).catch(() => {});
+  }, [next?.trackId, creds]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Optimistic toggle: don't rely on the embed's status broadcasts to know
-  // whether it's playing — flip our own state and send the matching command;
-  // incoming broadcasts (when they arrive) overwrite it with the truth.
   useEffect(() => {
     const toggle = () => {
-      setStatus((s) => {
-        send(track.itemId, s.paused ? 'play' : 'pause');
-        return { ...s, paused: !s.paused };
-      });
+      const el = audioRef.current;
+      if (!el || !src) return;
+      if (el.paused) {
+        // Synchronous — no await between the gesture and play().
+        el.play().then(
+          () => setPlaying(true),
+          (e) => setWhy(String(e?.message || e)),
+        );
+      } else {
+        el.pause();
+        setPlaying(false);
+      }
     };
     const onKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
@@ -83,59 +72,62 @@ export default function Player({ track, next, inboxId }) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('crate-toggle-play', toggle);
     };
-  }, [track.itemId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [src]);
 
   return (
     <div className="player card">
-      {[track, next].filter(Boolean).map((t) => (
-        <iframe
-          key={t.itemId}
-          ref={(el) => {
-            if (el) refs.current.set(t.itemId, el);
-            else refs.current.delete(t.itemId);
-          }}
-          className="embed"
-          style={t === track ? undefined : { display: 'none' }}
-          title={`Tidal player ${t.title}`}
-          src={`https://embed.tidal.com/tracks/${t.trackId}`}
-          // Exactly what was on the iframe the last time this played. Tidal
-          // documents a wider set; that's a change for after it works again.
-          allow="encrypted-media; autoplay"
-        />
-      ))}
+      {/* Cover art, and a tap target that opens the track in Tidal. It can't
+          play here, so it isn't asked to. */}
+      <iframe
+        key={track.itemId}
+        className="embed"
+        title={`Tidal player ${track.title}`}
+        src={`https://embed.tidal.com/tracks/${track.trackId}`}
+        allow="encrypted-media; autoplay"
+      />
+      <audio
+        ref={audioRef}
+        src={src || undefined}
+        preload="auto"
+        playsInline
+        onTimeUpdate={(e) => setPos(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setLen(e.currentTarget.duration || 30)}
+        onEnded={() => setPlaying(false)}
+      />
       <div className="progress-bar">
         <div
           className="progress-bar-fill"
-          style={{
-            width: status.duration
-              ? `${(status.currentTime / status.duration) * 100}%`
-              : 0,
-          }}
+          style={{ width: len ? `${(pos / len) * 100}%` : 0 }}
         />
       </div>
       <div className="row">
         <button
           className="secondary compact"
+          disabled={!src}
           onClick={() => window.dispatchEvent(new Event('crate-toggle-play'))}
         >
-          {status.paused ? '▶' : '⏸'}
+          {playing ? '⏸' : '▶'}
         </button>
         <span className="stopwatch">
-          {fmt(status.currentTime)} / {fmt(status.duration)}
+          {src ? `${fmt(pos)} / ${fmt(len)} preview` : why ? 'no clip' : '…'}
         </span>
       </div>
-      {/* listen.tidal.com, not tidal.com or tidal:// — the web player is the
-          one thing confirmed to play on the phone, and it stays in Safari, so
-          coming back here is a tab switch rather than an app switch. Playing
-          the whole inbox there and swiping along in here is the workflow that
-          actually works while the embed is broken. */}
+      {why && <div className="muted small">{why}</div>}
+      {/* listen.tidal.com is confirmed to play full tracks on the phone, and
+          stays in Safari, so getting back here is a tab switch. */}
       <div className="row player-links">
         {inboxId && (
-          <a className="applink primary" href={`https://listen.tidal.com/playlist/${inboxId}`}>
+          <a
+            className="applink primary"
+            href={`https://listen.tidal.com/playlist/${inboxId}`}
+          >
             ▶ Play inbox in Tidal
           </a>
         )}
-        <a className="applink right" href={`https://listen.tidal.com/track/${track.trackId}`}>
+        <a
+          className="applink right"
+          href={`https://listen.tidal.com/track/${track.trackId}`}
+        >
           This track
         </a>
       </div>

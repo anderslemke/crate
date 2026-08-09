@@ -199,7 +199,12 @@ export default function App() {
             canAdd={!!targetId}
           />
           {queue[0] && (
-            <Player track={queue[0]} next={queue[1]} inboxId={inbox?.id} />
+            <Player
+              track={queue[0]}
+              next={queue[1]}
+              inboxId={inbox?.id}
+              creds={creds}
+            />
           )}
           {undoStack.length > 0 && (
             <button className="secondary undo" onClick={undo} disabled={busy}>
