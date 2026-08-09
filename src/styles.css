@@ -173,6 +173,15 @@ code { font-size: 13px; word-break: break-all; }
 
 .undo { align-self: center; }
 
+.refresh {
+  align-self: center;
+  margin-top: auto;
+  background: transparent;
+  color: #9a9aa8;
+  font-size: 14px;
+  padding: 10px 16px;
+}
+
 .embed {
   width: 100%;
   height: 100px;
