@@ -17,7 +17,7 @@ const EMBED_ORIGIN = 'https://embed.tidal.com';
 //
 // The clip url is fetched when the card opens and left loaded but unplayed,
 // so play() on your press runs synchronously inside the gesture.
-export default function Player({ track, next, inboxId, creds }) {
+export default function Player({ track, next, creds }) {
   const audioRef = useRef(null);
   const frames = useRef(new Map());
   const [src, setSrc] = useState('');
@@ -123,33 +123,24 @@ export default function Player({ track, next, inboxId, creds }) {
           />
         </div>
       )}
+      {/* Hearing the clip is what this screen is for, so it gets the primary
+          button. Going to Tidal for the full track is the way out, not the
+          main move. */}
       <div className="row">
         <button
-          className="secondary compact"
+          className="play-main"
           onClick={() => window.dispatchEvent(new Event('crate-toggle-play'))}
         >
-          {playing ? '⏸' : '▶'}
+          {playing ? '⏸ Pause' : '▶ Play 30s'}
         </button>
-        <span className="stopwatch">
-          {src ? `${fmt(pos)} / ${fmt(len)} preview` : '30s preview'}
-        </span>
+        <span className="stopwatch">{src ? `${fmt(pos)} / ${fmt(len)}` : ''}</span>
       </div>
-      {/* listen.tidal.com plays full tracks on the phone and stays in Safari,
-          so getting back to the deck is a tab switch. */}
       <div className="row player-links">
-        {inboxId && (
-          <a
-            className="applink primary"
-            href={`https://listen.tidal.com/playlist/${inboxId}`}
-          >
-            ▶ Play inbox in Tidal
-          </a>
-        )}
         <a
           className="applink right"
           href={`https://listen.tidal.com/track/${track.trackId}`}
         >
-          This track
+          Full track in Tidal
         </a>
       </div>
     </div>
