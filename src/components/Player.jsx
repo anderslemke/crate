@@ -13,6 +13,9 @@ const EMBED_ORIGIN = 'https://embed.tidal.com';
 function EmbedPlayer({ track, next }) {
   const refs = useRef(new Map());
   const [status, setStatus] = useState({ currentTime: 0, duration: 30, paused: true });
+  // The user's intent, carried across swipes: playing → next card auto-plays,
+  // paused → next card stays quiet.
+  const wantPlay = useRef(true);
 
   const send = (itemId, commandName) => {
     refs.current
@@ -45,12 +48,13 @@ function EmbedPlayer({ track, next }) {
     return () => window.removeEventListener('message', onMsg);
   }, [track.itemId]);
 
-  // Card change: silence the outgoing embed, start the incoming one.
-  // (The swipe itself is the user gesture that lets autoplay through.)
+  // Card change: silence the outgoing embed; start the incoming one only if
+  // the user was in a playing state. (The swipe itself is the user gesture
+  // that lets autoplay through.)
   useEffect(() => {
-    setStatus({ currentTime: 0, duration: 30, paused: false });
+    setStatus({ currentTime: 0, duration: 30, paused: !wantPlay.current });
     for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
-    send(track.itemId, 'play');
+    if (wantPlay.current) send(track.itemId, 'play');
   }, [track.itemId]);
 
   // Optimistic toggle: don't rely on the embed's status broadcasts to know
@@ -60,6 +64,7 @@ function EmbedPlayer({ track, next }) {
     const toggle = () => {
       setStatus((s) => {
         send(track.itemId, s.paused ? 'play' : 'pause');
+        wantPlay.current = s.paused;
         return { ...s, paused: !s.paused };
       });
     };
@@ -93,7 +98,7 @@ function EmbedPlayer({ track, next }) {
           title={`Tidal player ${t.title}`}
           src={`https://embed.tidal.com/tracks/${t.trackId}`}
           allow="encrypted-media; autoplay"
-          onLoad={() => t === track && send(t.itemId, 'play')}
+          onLoad={() => t === track && wantPlay.current && send(t.itemId, 'play')}
         />
       ))}
       <div className="progress-bar">
