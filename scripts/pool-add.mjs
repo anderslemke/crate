@@ -14,20 +14,30 @@ const API = 'https://openapi.tidal.com/v2';
 const COUNTRY = 'DK';
 const INBOX_NAME = 'Crate Inbox';
 
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
 async function api(token, path, opts = {}) {
   const sep = path.includes('?') ? '&' : '?';
-  const r = await fetch(`${API}${path}${sep}countryCode=${COUNTRY}`, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/vnd.api+json',
-      Accept: 'application/vnd.api+json',
-      ...opts.headers,
-    },
-  });
-  if (!r.ok) throw new Error(`${opts.method || 'GET'} ${path}: ${r.status} ${await r.text()}`);
-  const text = await r.text();
-  return text ? JSON.parse(text) : null;
+  for (let attempt = 1; ; attempt++) {
+    const r = await fetch(`${API}${path}${sep}countryCode=${COUNTRY}`, {
+      ...opts,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/vnd.api+json',
+        Accept: 'application/vnd.api+json',
+        ...opts.headers,
+      },
+    });
+    // Back off and retry on rate limiting / transient server errors.
+    if ((r.status === 429 || r.status >= 500) && attempt < 5) {
+      const wait = Number(r.headers.get('retry-after')) * 1000 || attempt * 2000;
+      await sleep(wait);
+      continue;
+    }
+    if (!r.ok) throw new Error(`${opts.method || 'GET'} ${path}: ${r.status} ${await r.text()}`);
+    const text = await r.text();
+    return text ? JSON.parse(text) : null;
+  }
 }
 
 const norm = (s) =>
@@ -57,7 +67,7 @@ function mapTracks(j) {
 async function search(token, query) {
   const j = await api(
     token,
-    `/searchresults/${encodeURIComponent(query)}?include=tracks,tracks.artists`,
+    `/searchResults/${encodeURIComponent(query)}?include=tracks,tracks.artists`,
   );
   return mapTracks(j);
 }
