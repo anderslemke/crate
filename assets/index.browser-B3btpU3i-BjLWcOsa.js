@@ -1,1 +1,0 @@
-var n="useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict",r=(a=21)=>{let e="",t=crypto.getRandomValues(new Uint8Array(a|=0));for(;a--;)e+=n[t[a]&63];return e};export{r as nanoid};
