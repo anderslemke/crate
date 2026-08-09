@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { autoStart, isPlaybackGated, loadAndPlay } from '../api/tidal.js';
+import { autoStart, clearPlaybackGate, isPlaybackGated, loadAndPlay } from '../api/tidal.js';
 
 const fmt = (s) =>
   `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -12,7 +12,17 @@ const EMBED_ORIGIN = 'https://embed.tidal.com';
 // promotion swaps players instantly.
 function EmbedPlayer({ track, next, reason, onRetry }) {
   const refs = useRef(new Map());
-  const [status, setStatus] = useState({ currentTime: 0, duration: 30, paused: true });
+  // Seed the length from the track we already know, so the readout isn't a
+  // 0:30 guess until the first broadcast lands (and forever, on iOS).
+  const [status, setStatus] = useState({
+    currentTime: 0,
+    duration: track.duration || 30,
+    paused: true,
+  });
+  // iOS ignores a postMessage play(): the gesture has to happen inside the
+  // iframe, so our ▶ can't reach it. If nothing has started shortly after the
+  // card opens, say where the working button is instead of leaving a dead one.
+  const [showTapHint, setShowTapHint] = useState(false);
   // The user's intent, carried across swipes: playing → next card auto-plays,
   // paused → next card stays quiet.
   const wantPlay = useRef(true);
@@ -39,7 +49,7 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
       if (d && typeof d.currentTime === 'number') {
         setStatus({
           currentTime: d.currentTime,
-          duration: d.duration || 30,
+          duration: d.duration || track.duration || 30,
           paused: !!d.paused,
         });
       }
@@ -54,9 +64,12 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
   // otherwise — on iOS the play command is ignored, and claiming ⏸ over a
   // silent embed is worse than a stale ▶ for a moment.
   useEffect(() => {
-    setStatus({ currentTime: 0, duration: 30, paused: true });
+    setStatus({ currentTime: 0, duration: track.duration || 30, paused: true });
     for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
     if (wantPlay.current) send(track.itemId, 'play');
+    setShowTapHint(false);
+    const t = setTimeout(() => setShowTapHint(true), 2000);
+    return () => clearTimeout(t);
   }, [track.itemId]);
 
   // Optimistic toggle: don't rely on the embed's status broadcasts to know
@@ -127,6 +140,9 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
           Open in Tidal app
         </a>
       </div>
+      {showTapHint && status.paused && !status.currentTime && (
+        <div className="muted small">↑ Tap ▶ in the Tidal player to start</div>
+      )}
       {/* Why you're looking at an iframe instead of the real player. */}
       <div className="row muted small">
         <span className="embed-reason">Embed mode — {String(reason).slice(0, 200)}</span>
@@ -156,7 +172,7 @@ export default function Player({ track, next, controls }) {
   // 403 round-trips (keeps the preloaded iframes mounted).
   useEffect(() => {
     if (isPlaybackGated()) {
-      setLoadErr('Tidal is not serving this app in-page audio');
+      setLoadErr('Tidal serves in-page audio only to approved apps (403)');
       return undefined;
     }
     let cancelled = false;
@@ -244,8 +260,12 @@ export default function Player({ track, next, controls }) {
         track={track}
         next={next}
         reason={loadErr}
-        // No point offering a retry against a hard 403 — that one is latched.
-        onRetry={isPlaybackGated() ? null : () => setAttempt((a) => a + 1)}
+        // Retry is a full re-probe: it forgets the remembered gate too, so
+        // it's the way back in if Tidal ever approves the app.
+        onRetry={() => {
+          clearPlaybackGate();
+          setAttempt((a) => a + 1);
+        }}
       />
     );
   }

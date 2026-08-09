@@ -293,12 +293,28 @@ export function autoStart(duration) {
   return Math.max(0, Math.min(Math.round(duration * 0.25), 45) + bias);
 }
 
-// Once both playback paths have 403'd (dev-mode app awaiting production
-// approval), stop probing per card — the UI drops to embed mode for the rest
-// of the session. Only a real 401/403 latches this: a timeout or a network
-// blip used to cost the whole session its in-app player.
-let gated = false;
+// In-app playback being impossible is a property of the device and the app's
+// Tidal approval, not of this page load: an iPhone has no MediaSource for the
+// SDK, and an unapproved app gets 403 on preview manifests. Remember it so
+// every session doesn't re-prove it on its first card, but let it expire in
+// case approval lands — and let Retry clear it outright.
+const GATE_KEY = 'crate_playback_gate';
+const GATE_TTL = 24 * 60 * 60 * 1000;
+
+let gated = Date.now() - +(localStorage.getItem(GATE_KEY) || 0) < GATE_TTL;
 export const isPlaybackGated = () => gated;
+
+function latchPlaybackGate() {
+  gated = true;
+  localStorage.setItem(GATE_KEY, String(Date.now()));
+}
+
+// A full re-probe: forget both the gate and the SDK verdict.
+export function clearPlaybackGate() {
+  gated = false;
+  sdkUnavailable = false;
+  localStorage.removeItem(GATE_KEY);
+}
 
 // Every load takes a ticket. A newer load — or a stop, i.e. the card being
 // swiped away — makes the older one stale, so a slow response can't start
@@ -440,7 +456,9 @@ export async function loadAndPlay(trackId, startSeconds) {
   } catch (e2) {
     if (stale()) return { stale: true };
     console.error('[crate] preview fallback failed too:', e2);
-    if (isAuthGated(fullErr) && isAuthGated(e2)) gated = true;
+    // Nothing in-app can work when the SDK can't run here (or is refused)
+    // and Tidal also refuses the preview manifest. Stop asking.
+    if ((sdkUnavailable || isAuthGated(fullErr)) && isAuthGated(e2)) latchPlaybackGate();
     // Both reasons, because either one alone sends you down the wrong path.
     throw new Error(`full: ${msg(fullErr)} · preview: ${msg(e2)}`);
   }
