@@ -182,6 +182,8 @@ code { font-size: 13px; word-break: break-all; }
   padding: 10px 16px;
 }
 
+.embed-reason { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .embed {
   width: 100%;
   height: 100px;

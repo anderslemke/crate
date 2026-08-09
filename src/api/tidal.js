@@ -207,6 +207,8 @@ let playerReady = null;
 
 // The player refuses to play without an event sender (play-logging is
 // mandatory); wire up the official event producer against Tidal's collector.
+// A rejected init drops the memo: one bad network moment at boot shouldn't
+// leave every later card awaiting the same rejected promise.
 export function initPlayer() {
   if (!playerReady) {
     playerReady = (async () => {
@@ -228,10 +230,49 @@ export function initPlayer() {
       });
       Player.setCredentialsProvider(credentialsProvider);
       Player.setEventSender(EventProducer);
-    })();
+    })().catch((e) => {
+      playerReady = null;
+      throw e;
+    });
   }
   return playerReady;
 }
+
+// Nothing in the SDK settles on its own if a request stalls, and a load that
+// never settles is exactly what "it just didn't start" looks like. Time out
+// so the fallbacks get a turn.
+const LOAD_TIMEOUT = 12000;
+
+function withTimeout(promise, what, ms = LOAD_TIMEOUT) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms);
+    Promise.resolve(promise).then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+// Autoplay policy, not a broken player: the audio is loaded and one user
+// gesture away from playing. Never a reason to fall back or to give up.
+// Chrome words it "the user didn't interact with the document first", Safari
+// "not allowed by the user agent" — match the name first, the prose second.
+const isAutoplayBlocked = (e) =>
+  e?.name === 'NotAllowedError' ||
+  /notallowed|not allowed|user (gesture|activation)|interact with the document/i.test(
+    String(e?.message || e),
+  );
+
+// Tidal actually refusing us (dev-mode app, no production approval). This is
+// the only failure worth latching for the session — everything else is worth
+// retrying on the next card.
+const isAuthGated = (e) => /\b(401|403)\b/.test(String(e?.message || e));
 
 // Start position heuristic: skip the intro, land around the first verse/chorus.
 // 25% in, capped at 45s; short tracks start from the top. `crate_start_bias`
@@ -244,9 +285,15 @@ export function autoStart(duration) {
 
 // Once both playback paths have 403'd (dev-mode app awaiting production
 // approval), stop probing per card — the UI drops to embed mode for the rest
-// of the session.
+// of the session. Only a real 401/403 latches this: a timeout or a network
+// blip used to cost the whole session its in-app player.
 let gated = false;
 export const isPlaybackGated = () => gated;
+
+// Every load takes a ticket. A newer load — or a stop, i.e. the card being
+// swiped away — makes the older one stale, so a slow response can't start
+// playing the previous card over the one that's now on screen.
+let loadSeq = 0;
 
 // 30s-preview fallback, bypassing the player SDK: dev-mode apps get 403 on
 // FULL playbackinfo, but PREVIEW manifests may still be served. Previews are
@@ -274,16 +321,21 @@ async function playPreviewClip(trackId) {
   if (!url) throw new Error(`no url in ${info.manifestMimeType} manifest`);
   stopPreviewAudio();
   audioEl = new Audio(url);
-  await audioEl.play();
+  try {
+    await audioEl.play();
+  } catch (e) {
+    // Keep the element around: the src is loaded, so ▶ starts it instantly.
+    if (!isAutoplayBlocked(e)) throw e;
+    return { mode: 'preview', blocked: true };
+  }
+  return { mode: 'preview' };
 }
 
-// Loads and starts playback. Returns 'full' when the real track plays,
-// 'preview' on the 30s-clip fallback. Throws only if both fail — with the
-// original full-track error, which is the useful one.
-export async function loadAndPlay(trackId, startSeconds) {
-  await initPlayer();
-  try {
-    await Player.load(
+async function loadFullTrack(trackId, startSeconds, stale) {
+  await withTimeout(initPlayer(), 'player init');
+  if (stale()) return { stale: true };
+  await withTimeout(
+    Player.load(
       {
         productId: String(trackId),
         productType: 'track',
@@ -291,39 +343,101 @@ export async function loadAndPlay(trackId, startSeconds) {
         sourceType: 'OTHER',
       },
       startSeconds,
-    );
+    ),
+    'track load',
+  );
+  if (stale()) return { stale: true };
+  stopPreviewAudio();
+  try {
     await Player.play();
-    stopPreviewAudio();
-    return 'full';
   } catch (e) {
-    console.error('[crate] full-track load failed:', e);
+    if (!isAutoplayBlocked(e)) throw e;
+    return { mode: 'full', blocked: true };
+  }
+  return { mode: 'full' };
+}
+
+// Loads and starts playback, returning what happened:
+//   {mode: 'full'}          — the real track is playing
+//   {mode: 'preview'}       — the 30s clip fallback is playing
+//   {..., blocked: true}    — loaded and ready, but the browser wants a
+//                             gesture before it makes noise
+//   {stale: true}           — a newer load superseded this one; do nothing
+// Throws only when every backend failed for real, with the full-track error,
+// which is the useful one. Transient failures get one retry before the
+// fallbacks, since a retried timeout usually just works.
+export async function loadAndPlay(trackId, startSeconds) {
+  const seq = ++loadSeq;
+  const stale = () => seq !== loadSeq;
+  let fullErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await playPreviewClip(trackId);
-      return 'preview';
-    } catch (e2) {
-      console.error('[crate] preview fallback failed too:', e2);
-      gated = true;
-      throw e;
+      return await loadFullTrack(trackId, startSeconds, stale);
+    } catch (e) {
+      if (stale()) return { stale: true };
+      fullErr = e;
+      if (isAuthGated(e) || attempt === 1) break;
+      console.warn('[crate] full-track load failed, retrying:', e);
     }
+  }
+  console.error('[crate] full-track load failed:', fullErr);
+  try {
+    const result = await playPreviewClip(trackId);
+    if (stale()) {
+      stopPreviewAudio();
+      return { stale: true };
+    }
+    return result;
+  } catch (e2) {
+    if (stale()) return { stale: true };
+    console.error('[crate] preview fallback failed too:', e2);
+    if (isAuthGated(fullErr) && isAuthGated(e2)) gated = true;
+    throw fullErr;
+  }
+}
+
+// The SDK throws if it's asked about a player that never loaded anything —
+// which happens on every card that fell back to the embed. Readers must not
+// throw: they run on a 400ms poll and inside effect cleanups.
+function quiet(fn, fallback) {
+  try {
+    const v = fn();
+    if (v && typeof v.catch === 'function') v.catch(() => {});
+    return v;
+  } catch {
+    return fallback;
   }
 }
 
 // Controls route to whichever backend is active: the SDK player for full
 // tracks, or the fallback <audio> element for 30s previews.
 export const playerControls = {
-  play: () => (audioEl ? audioEl.play() : Player.play()),
-  pause: () => (audioEl ? audioEl.pause() : Player.pause()),
-  seek: (s) => {
-    if (audioEl) audioEl.currentTime = Math.max(0, s);
-    else Player.seek(Math.max(0, s));
+  // Always a promise, never a synchronous throw: the caller shows whatever
+  // reason it refused for, and a click handler is a bad place to explode.
+  play: () => {
+    try {
+      return Promise.resolve(audioEl ? audioEl.play() : Player.play());
+    } catch (e) {
+      return Promise.reject(e);
+    }
   },
-  position: () => (audioEl ? audioEl.currentTime : Player.getAssetPosition()),
-  state: () => {
-    if (audioEl) return audioEl.paused ? 'NOT_PLAYING' : 'PLAYING';
-    return Player.getPlaybackState();
-  },
+  pause: () => quiet(() => (audioEl ? audioEl.pause() : Player.pause())),
+  seek: (s) =>
+    quiet(() => {
+      if (audioEl) audioEl.currentTime = Math.max(0, s);
+      else Player.seek(Math.max(0, s));
+    }),
+  position: () => quiet(() => (audioEl ? audioEl.currentTime : Player.getAssetPosition()), 0) || 0,
+  state: () =>
+    quiet(() => {
+      if (audioEl) return audioEl.paused ? 'NOT_PLAYING' : 'PLAYING';
+      return Player.getPlaybackState();
+    }, 'NOT_PLAYING'),
+  // Also cancels any in-flight load, so the card being swiped away can't
+  // start playing a moment after it's gone.
   stop: () => {
+    loadSeq++;
     stopPreviewAudio();
-    Player.pause();
+    quiet(() => Player.pause());
   },
 };

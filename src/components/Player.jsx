@@ -10,7 +10,7 @@ const EMBED_ORIGIN = 'https://embed.tidal.com';
 // broadcasts {currentTime, duration, paused} back — no seek, sadly, so the
 // jump buttons stay SDK-only. Next card's iframe is kept mounted (hidden) so
 // promotion swaps players instantly.
-function EmbedPlayer({ track, next }) {
+function EmbedPlayer({ track, next, reason, onRetry }) {
   const refs = useRef(new Map());
   const [status, setStatus] = useState({ currentTime: 0, duration: 30, paused: true });
   // The user's intent, carried across swipes: playing → next card auto-plays,
@@ -125,6 +125,15 @@ function EmbedPlayer({ track, next }) {
           Open in Tidal app
         </a>
       </div>
+      {/* Why you're looking at an iframe instead of the real player. */}
+      <div className="row muted small">
+        <span className="embed-reason">Embed mode — {String(reason).slice(0, 120)}</span>
+        {onRetry && (
+          <button className="secondary compact right" onClick={onRetry}>
+            ↻ Retry
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -133,7 +142,9 @@ export default function Player({ track, next, controls }) {
   const [pos, setPos] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [preview, setPreview] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const [loadErr, setLoadErr] = useState('');
+  const [attempt, setAttempt] = useState(0); // bumped by "try again"
   const barRef = useRef(null);
   // Preview clips are ~30s regardless of the track's real length.
   const duration = preview ? 30 : track.duration || 0;
@@ -143,18 +154,23 @@ export default function Player({ track, next, controls }) {
   // 403 round-trips (keeps the preloaded iframes mounted).
   useEffect(() => {
     if (isPlaybackGated()) {
-      setLoadErr('gated');
+      setLoadErr('Tidal is not serving this app in-page audio');
       return undefined;
     }
     let cancelled = false;
     setLoadErr('');
-    setPos(autoStart(duration));
+    setBlocked(false);
+    // From the track's own length, not `duration` — that still reads 30s
+    // from the previous card if it fell back to a preview clip.
+    const start = autoStart(track.duration || 0);
+    setPos(start);
     (async () => {
       try {
-        const mode = await loadAndPlay(track.trackId, autoStart(duration));
-        if (cancelled) return;
-        setPreview(mode === 'preview');
-        setPlaying(true);
+        const r = await loadAndPlay(track.trackId, start);
+        if (cancelled || r.stale) return;
+        setPreview(r.mode === 'preview');
+        setBlocked(!!r.blocked);
+        setPlaying(!r.blocked);
       } catch (e) {
         if (cancelled) return;
         setPlaying(false);
@@ -166,13 +182,15 @@ export default function Player({ track, next, controls }) {
       cancelled = true;
       controls.stop();
     };
-  }, [track.trackId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [track.trackId, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll position while playing.
   useEffect(() => {
     const t = setInterval(() => {
       setPos(controls.position() || 0);
-      setPlaying(controls.state() === 'PLAYING');
+      const live = controls.state() === 'PLAYING';
+      setPlaying(live);
+      if (live) setBlocked(false);
     }, 400);
     return () => clearInterval(t);
   }, [controls]);
@@ -190,7 +208,10 @@ export default function Player({ track, next, controls }) {
 
   const toggle = () => {
     if (controls.state() === 'PLAYING') controls.pause();
-    else Promise.resolve(controls.play()).catch((e) => setLoadErr(String(e?.message || e)));
+    else
+      Promise.resolve(controls.play())
+        .then(() => setBlocked(false))
+        .catch((e) => setLoadErr(String(e?.message || e)));
   };
 
   // Keyboard: space toggles, 1-4 jump, ,/. nudge ±10s
@@ -216,12 +237,25 @@ export default function Player({ track, next, controls }) {
   // Both in-app backends refused (app not production-approved yet):
   // fall back to Tidal's embed widget, remote-controlled via postMessage.
   if (loadErr) {
-    return <EmbedPlayer track={track} next={next} />;
+    return (
+      <EmbedPlayer
+        track={track}
+        next={next}
+        reason={loadErr}
+        // No point offering a retry against a hard 403 — that one is latched.
+        onRetry={isPlaybackGated() ? null : () => setAttempt((a) => a + 1)}
+      />
+    );
   }
 
   return (
     <div className="player card">
       {preview && <div className="muted small">30s preview mode</div>}
+      {blocked && (
+        <div className="muted small">
+          Autoplay blocked by the browser — hit ▶ or tap the card to start
+        </div>
+      )}
       <div className="progress-bar tall" ref={barRef} onPointerDown={onBar}>
         <div
           className="progress-bar-fill"
