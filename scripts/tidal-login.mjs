@@ -28,6 +28,10 @@ export const TOKENS_PATH =
     'tidal-tokens.json',
   );
 
+// Default is the Crate app's ID — public by design (PKCE, no secret).
+// Env/.env.local can override to point at another Tidal app.
+const DEFAULT_CLIENT_ID = 'kme2TJ7OPFP0qDSQ';
+
 export function loadClientId() {
   if (process.env.TIDAL_CLIENT_ID) return process.env.TIDAL_CLIENT_ID;
   try {
@@ -35,8 +39,7 @@ export function loadClientId() {
     const m = /^TIDAL_CLIENT_ID=(.+)$/m.exec(env);
     if (m) return m[1].trim();
   } catch {}
-  console.error('Set TIDAL_CLIENT_ID in the environment or in .env.local');
-  process.exit(1);
+  return DEFAULT_CLIENT_ID;
 }
 
 const PORT = 8477;
