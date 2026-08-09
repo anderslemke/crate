@@ -78,17 +78,31 @@ export default function Player({ track, controls }) {
     return () => window.removeEventListener('keydown', onKey);
   });
 
+  // Both in-app backends refused (app not production-approved yet):
+  // fall back to Tidal's official embed widget — plays previews with one tap.
+  if (loadErr) {
+    return (
+      <div className="player card">
+        <iframe
+          className="embed"
+          title="Tidal player"
+          src={`https://embed.tidal.com/tracks/${track.trackId}`}
+          allow="encrypted-media; autoplay"
+          loading="lazy"
+        />
+        <div className="row">
+          <a className="small" href={`tidal://track/${track.trackId}`}>
+            ▶ Open in Tidal app
+          </a>
+          <span className="muted small right">awaiting Tidal production access</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="player card">
       {preview && <div className="muted small">30s preview mode</div>}
-      {loadErr && (
-        <div className="error small">No playback: {loadErr.slice(0, 80)}</div>
-      )}
-      {(preview || loadErr) && (
-        <a className="small" href={`tidal://track/${track.trackId}`}>
-          ▶ Open in Tidal app
-        </a>
-      )}
       <div className="progress-bar tall" ref={barRef} onPointerDown={onBar}>
         <div
           className="progress-bar-fill"
