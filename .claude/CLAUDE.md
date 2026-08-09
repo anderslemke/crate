@@ -48,12 +48,21 @@ pipe them through the script, report the summary + anything that missed.
 in `App.jsx`, Tidal knowledge isolated in `src/api/tidal.js`, deployed to
 GitHub Pages by `.github/workflows/deploy.yml`.
 
-Playback is Tidal's embed widget in an iframe, and nothing else. The
-`@tidal-music/player` SDK is gone: it needs MediaSource, which iOS Safari
-doesn't have, and the preview-clip API answers 403 unless the app is
-production-approved — so every in-app path failed on the phone and the
-fallback machinery around them only made the failure look like a player.
-Don't reintroduce an in-app player without checking those two things first.
+Playback is Tidal's embed widget in an iframe, and nothing else. Two facts
+killed the in-app player, both worth knowing before anyone rebuilds one:
+
+- Tidal serves playback **only** through its SDKs — the Web API exposes no
+  playback endpoints. The `@tidal-music/player` SDK needs MediaSource, which
+  iOS Safari doesn't have, so it reports "No active player" on the phone.
+- The 30s-preview fallback under it called `api.tidal.com/v1/…/playbackinfo`,
+  a legacy internal endpoint outside the developer platform. It needs the
+  `r_usr` scope, which developer-platform apps can't request, so it answers
+  403 on every device — not a matter of approval, and never going to work.
+
+That leaves the embed widget, which carries its own Tidal session. The
+fallback machinery that used to wrap all this (timeouts, retries, an autoplay
+unlock, a persisted gate, a postMessage transport) only made failure look
+like playback; don't bring it back.
 
 Out of scope for trawl sessions: don't edit `src/`, don't remove tracks from
 the inbox, don't touch target playlists — reviewing is Anders' job in the app.
