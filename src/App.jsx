@@ -201,8 +201,8 @@ export default function App() {
               ↩︎ Undo {undoStack[0].dir === 'right' ? 'add' : 'dismiss'}
             </button>
           )}
-          <button className="secondary refresh" onClick={refresh}>
-            ↻ Refresh inbox
+          <button className="secondary refresh" onClick={() => window.location.reload()}>
+            ↻ Refresh
           </button>
         </>
       )}
