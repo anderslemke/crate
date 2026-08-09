@@ -7,21 +7,19 @@ const EMBED_ORIGIN = 'https://embed.tidal.com';
 
 // Tidal's embed, driven by postMessage — NOT by its own ▶, which does nothing
 // in this context. `{commandName: "play"|"pause"}` goes in, `{currentTime,
-// duration, paused}` comes back. This is the only thing that has ever made
-// sound on the phone, so it stays even though everything else got stripped.
+// duration, paused}` comes back.
 //
-// Current and next card are both mounted, so a swipe promotes an iframe that
-// has already loaded; the outgoing one unmounts, which stops its audio.
+// Nothing ever starts on its own: a card opens silent and plays when you ask
+// it to. Current and next card are both mounted, so a swipe promotes an
+// iframe that has already loaded; the outgoing one unmounts, which is what
+// stops its audio.
 export default function Player({ track, next, inboxId }) {
   const refs = useRef(new Map());
   const [status, setStatus] = useState({
     currentTime: 0,
     duration: track.duration || 30,
-    paused: false,
+    paused: true,
   });
-  // The user's intent, carried across swipes: playing → next card auto-plays,
-  // paused → next card stays quiet.
-  const wantPlay = useRef(true);
 
   const send = (itemId, commandName) => {
     refs.current
@@ -54,17 +52,12 @@ export default function Player({ track, next, inboxId }) {
     return () => window.removeEventListener('message', onMsg);
   }, [track.itemId]);
 
-  // Card change: silence the outgoing embed; start the incoming one only if
-  // the user was in a playing state. (The swipe itself is the user gesture
-  // that lets autoplay through.)
+  // Card change: back to a silent, unstarted player. The outgoing iframe
+  // unmounts on its own, which stops whatever it was playing; the incoming
+  // one is told nothing until you ask for it.
   useEffect(() => {
-    setStatus({
-      currentTime: 0,
-      duration: track.duration || 30,
-      paused: !wantPlay.current,
-    });
+    setStatus({ currentTime: 0, duration: track.duration || 30, paused: true });
     for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
-    if (wantPlay.current) send(track.itemId, 'play');
   }, [track.itemId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Optimistic toggle: don't rely on the embed's status broadcasts to know
@@ -74,7 +67,6 @@ export default function Player({ track, next, inboxId }) {
     const toggle = () => {
       setStatus((s) => {
         send(track.itemId, s.paused ? 'play' : 'pause');
-        wantPlay.current = s.paused;
         return { ...s, paused: !s.paused };
       });
     };
@@ -109,7 +101,6 @@ export default function Player({ track, next, inboxId }) {
           // Exactly what was on the iframe the last time this played. Tidal
           // documents a wider set; that's a change for after it works again.
           allow="encrypted-media; autoplay"
-          onLoad={() => t === track && wantPlay.current && send(t.itemId, 'play')}
         />
       ))}
       <div className="progress-bar">
