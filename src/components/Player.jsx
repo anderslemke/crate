@@ -20,9 +20,12 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
     paused: true,
   });
   // iOS ignores a postMessage play(): the gesture has to happen inside the
-  // iframe, so our ▶ can't reach it. If nothing has started shortly after the
-  // card opens, say where the working button is instead of leaving a dead one.
+  // iframe, so our ▶ can't reach it. A command that produces no status
+  // broadcast didn't land — at which point we stop showing a transport we
+  // don't drive and point at the button that does work.
   const [showTapHint, setShowTapHint] = useState(false);
+  const [controllable, setControllable] = useState(true);
+  const beats = useRef(0); // status broadcasts seen for this card
   // The user's intent, carried across swipes: playing → next card auto-plays,
   // paused → next card stays quiet.
   const wantPlay = useRef(true);
@@ -47,6 +50,10 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
         }
       }
       if (d && typeof d.currentTime === 'number') {
+        // It answered, so our commands do land here — trust the transport.
+        beats.current += 1;
+        setControllable(true);
+        setShowTapHint(false);
         setStatus({
           currentTime: d.currentTime,
           duration: d.duration || track.duration || 30,
@@ -66,9 +73,17 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
   useEffect(() => {
     setStatus({ currentTime: 0, duration: track.duration || 30, paused: true });
     for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
-    if (wantPlay.current) send(track.itemId, 'play');
+    beats.current = 0;
     setShowTapHint(false);
-    const t = setTimeout(() => setShowTapHint(true), 2000);
+    if (!wantPlay.current) return undefined;
+    send(track.itemId, 'play');
+    // Told it to play and heard nothing back: the command didn't land.
+    const t = setTimeout(() => {
+      if (beats.current === 0) {
+        setControllable(false);
+        setShowTapHint(true);
+      }
+    }, 2500);
     return () => clearTimeout(t);
   }, [track.itemId]);
 
@@ -76,11 +91,24 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
   // whether it's playing — flip our own state and send the matching command;
   // incoming broadcasts (when they arrive) overwrite it with the truth.
   useEffect(() => {
+    // ...but a play we never hear back from was optimism about nothing: put
+    // the button back the way it was instead of showing ⏸ over silence.
+    const verify = () => {
+      const before = beats.current;
+      setTimeout(() => {
+        if (beats.current !== before) return;
+        setControllable(false);
+        setShowTapHint(true);
+        setStatus((s) => ({ ...s, paused: true }));
+      }, 1500);
+    };
     const toggle = () => {
       setStatus((s) => {
-        send(track.itemId, s.paused ? 'play' : 'pause');
-        wantPlay.current = s.paused;
-        return { ...s, paused: !s.paused };
+        const starting = s.paused;
+        send(track.itemId, starting ? 'play' : 'pause');
+        wantPlay.current = starting;
+        if (starting) verify();
+        return { ...s, paused: !starting };
       });
     };
     const onKey = (e) => {
@@ -127,12 +155,14 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
         />
       </div>
       <div className="row">
-        <button
-          className="secondary compact"
-          onClick={() => window.dispatchEvent(new Event('crate-toggle-play'))}
-        >
-          {status.paused ? '▶' : '⏸'}
-        </button>
+        {controllable && (
+          <button
+            className="secondary compact"
+            onClick={() => window.dispatchEvent(new Event('crate-toggle-play'))}
+          >
+            {status.paused ? '▶' : '⏸'}
+          </button>
+        )}
         <span className="stopwatch">
           {fmt(status.currentTime)} / {fmt(status.duration)}
         </span>
@@ -140,7 +170,7 @@ function EmbedPlayer({ track, next, reason, onRetry }) {
           Open in Tidal app
         </a>
       </div>
-      {showTapHint && status.paused && !status.currentTime && (
+      {showTapHint && (
         <div className="muted small">↑ Tap ▶ in the Tidal player to start</div>
       )}
       {/* Why you're looking at an iframe instead of the real player. */}
@@ -202,8 +232,10 @@ export default function Player({ track, next, controls }) {
     };
   }, [track.trackId, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll position while playing.
+  // Poll position while playing. Not in embed mode: there's no in-app player
+  // to ask, and the embed keeps its own clock.
   useEffect(() => {
+    if (loadErr) return undefined;
     const t = setInterval(() => {
       setPos(controls.position() || 0);
       const live = controls.state() === 'PLAYING';
@@ -211,7 +243,7 @@ export default function Player({ track, next, controls }) {
       if (live) setBlocked(false);
     }, 400);
     return () => clearInterval(t);
-  }, [controls]);
+  }, [controls, loadErr]);
 
   const seekTo = (s) => {
     controls.seek(Math.min(Math.max(0, s), Math.max(0, duration - 1)));
@@ -233,7 +265,13 @@ export default function Player({ track, next, controls }) {
   };
 
   // Keyboard: space toggles, 1-4 jump, ,/. nudge ±10s
+  //
+  // Only while the in-app player is the one you're looking at. In embed mode
+  // the EmbedPlayer owns the transport, and this listener staying alive meant
+  // every play toggle also hit the dead SDK — whose "No active player" then
+  // overwrote the real reason on screen.
   useEffect(() => {
+    if (loadErr) return undefined;
     const onKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if (e.key === ' ') {
