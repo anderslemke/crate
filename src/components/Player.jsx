@@ -4,6 +4,113 @@ import { autoStart, isPlaybackGated, loadAndPlay } from '../api/tidal.js';
 const fmt = (s) =>
   `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
+const EMBED_ORIGIN = 'https://embed.tidal.com';
+
+// Tidal's embed accepts {commandName: "play"|"pause"} via postMessage and
+// broadcasts {currentTime, duration, paused} back — no seek, sadly, so the
+// jump buttons stay SDK-only. Next card's iframe is kept mounted (hidden) so
+// promotion swaps players instantly.
+function EmbedPlayer({ track, next }) {
+  const refs = useRef(new Map());
+  const [status, setStatus] = useState({ currentTime: 0, duration: 30, paused: true });
+
+  const send = (itemId, commandName) => {
+    refs.current
+      .get(itemId)
+      ?.contentWindow?.postMessage(JSON.stringify({ commandName }), EMBED_ORIGIN);
+  };
+
+  // Live progress from the visible embed only.
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== EMBED_ORIGIN) return;
+      if (e.source !== refs.current.get(track.itemId)?.contentWindow) return;
+      let d = e.data;
+      if (typeof d === 'string') {
+        try {
+          d = JSON.parse(d);
+        } catch {
+          return;
+        }
+      }
+      if (d && typeof d.currentTime === 'number') {
+        setStatus({
+          currentTime: d.currentTime,
+          duration: d.duration || 30,
+          paused: !!d.paused,
+        });
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [track.itemId]);
+
+  // Card change: silence the outgoing embed, start the incoming one.
+  // (The swipe itself is the user gesture that lets autoplay through.)
+  useEffect(() => {
+    setStatus({ currentTime: 0, duration: 30, paused: true });
+    for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
+    send(track.itemId, 'play');
+  }, [track.itemId]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.key === ' ') {
+        e.preventDefault();
+        send(track.itemId, status.paused ? 'play' : 'pause');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  const embeds = [track, next].filter(Boolean);
+  return (
+    <div className="player card">
+      {embeds.map((t) => (
+        <iframe
+          key={t.itemId}
+          ref={(el) => {
+            if (el) refs.current.set(t.itemId, el);
+            else refs.current.delete(t.itemId);
+          }}
+          className="embed"
+          style={t === track ? undefined : { display: 'none' }}
+          title={`Tidal player ${t.title}`}
+          src={`https://embed.tidal.com/tracks/${t.trackId}`}
+          allow="encrypted-media; autoplay"
+          onLoad={() => t === track && send(t.itemId, 'play')}
+        />
+      ))}
+      <div className="progress-bar">
+        <div
+          className="progress-bar-fill"
+          style={{
+            width: status.duration
+              ? `${(status.currentTime / status.duration) * 100}%`
+              : 0,
+          }}
+        />
+      </div>
+      <div className="row">
+        <button
+          className="secondary compact"
+          onClick={() => send(track.itemId, status.paused ? 'play' : 'pause')}
+        >
+          {status.paused ? '▶' : '⏸'}
+        </button>
+        <span className="stopwatch">
+          {fmt(status.currentTime)} / {fmt(status.duration)}
+        </span>
+        <a className="small right" href={`tidal://track/${track.trackId}`}>
+          Open in Tidal app
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export default function Player({ track, next, controls }) {
   const [pos, setPos] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -85,31 +192,9 @@ export default function Player({ track, next, controls }) {
   });
 
   // Both in-app backends refused (app not production-approved yet):
-  // fall back to Tidal's official embed widget — plays previews with one tap.
-  // The next card's iframe is kept mounted (hidden) so advancing the deck
-  // swaps players instantly instead of loading from scratch.
+  // fall back to Tidal's embed widget, remote-controlled via postMessage.
   if (loadErr) {
-    const embeds = [track, next].filter(Boolean);
-    return (
-      <div className="player card">
-        {embeds.map((t) => (
-          <iframe
-            key={t.itemId}
-            className="embed"
-            style={t === track ? undefined : { display: 'none' }}
-            title={`Tidal player ${t.title}`}
-            src={`https://embed.tidal.com/tracks/${t.trackId}`}
-            allow="encrypted-media; autoplay"
-          />
-        ))}
-        <div className="row">
-          <a className="small" href={`tidal://track/${track.trackId}`}>
-            ▶ Open in Tidal app
-          </a>
-          <span className="muted small right">awaiting Tidal production access</span>
-        </div>
-      </div>
-    );
+    return <EmbedPlayer track={track} next={next} />;
   }
 
   return (
