@@ -106,7 +106,9 @@ export default function Player({ track, next, inboxId }) {
           style={t === track ? undefined : { display: 'none' }}
           title={`Tidal player ${t.title}`}
           src={`https://embed.tidal.com/tracks/${t.trackId}`}
-          allow="autoplay *; encrypted-media *; fullscreen *; web-share *;"
+          // Exactly what was on the iframe the last time this played. Tidal
+          // documents a wider set; that's a change for after it works again.
+          allow="encrypted-media; autoplay"
           onLoad={() => t === track && wantPlay.current && send(t.itemId, 'play')}
         />
       ))}
