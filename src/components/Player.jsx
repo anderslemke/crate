@@ -48,13 +48,21 @@ function EmbedPlayer({ track, next }) {
   // Card change: silence the outgoing embed, start the incoming one.
   // (The swipe itself is the user gesture that lets autoplay through.)
   useEffect(() => {
-    setStatus({ currentTime: 0, duration: 30, paused: true });
+    setStatus({ currentTime: 0, duration: 30, paused: false });
     for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
     send(track.itemId, 'play');
   }, [track.itemId]);
 
+  // Optimistic toggle: don't rely on the embed's status broadcasts to know
+  // whether it's playing — flip our own state and send the matching command;
+  // incoming broadcasts (when they arrive) overwrite it with the truth.
   useEffect(() => {
-    const toggle = () => send(track.itemId, status.paused ? 'play' : 'pause');
+    const toggle = () => {
+      setStatus((s) => {
+        send(track.itemId, s.paused ? 'play' : 'pause');
+        return { ...s, paused: !s.paused };
+      });
+    };
     const onKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if (e.key === ' ') {
@@ -68,7 +76,7 @@ function EmbedPlayer({ track, next }) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('crate-toggle-play', toggle);
     };
-  });
+  }, [track.itemId]);
 
   const embeds = [track, next].filter(Boolean);
   return (
@@ -101,7 +109,7 @@ function EmbedPlayer({ track, next }) {
       <div className="row">
         <button
           className="secondary compact"
-          onClick={() => send(track.itemId, status.paused ? 'play' : 'pause')}
+          onClick={() => window.dispatchEvent(new Event('crate-toggle-play'))}
         >
           {status.paused ? '▶' : '⏸'}
         </button>
