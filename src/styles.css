@@ -159,17 +159,6 @@ code { font-size: 13px; word-break: break-all; }
 .big-emoji { font-size: 48px; margin: 0; }
 
 .player { display: flex; flex-direction: column; gap: 8px; }
-.progress-bar {
-  height: 4px;
-  background: #22222c;
-  border-radius: 2px;
-  overflow: hidden;
-}
-.progress-bar.tall { height: 22px; border-radius: 6px; cursor: pointer; touch-action: none; }
-.progress-bar-fill { height: 100%; background: #5a7cff; transition: width 0.2s linear; }
-.player-times { justify-content: space-between; }
-.stopwatch { font-variant-numeric: tabular-nums; color: #9a9aa8; font-size: 13px; }
-.player-controls { flex-wrap: wrap; justify-content: center; }
 
 .undo { align-self: center; }
 
@@ -181,10 +170,6 @@ code { font-size: 13px; word-break: break-all; }
   font-size: 14px;
   padding: 10px 16px;
 }
-
-/* Two reasons can be long; wrap rather than truncate — it's the only clue
-   on screen about why in-app playback gave up. */
-.embed-reason { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
 
 .embed {
   width: 100%;

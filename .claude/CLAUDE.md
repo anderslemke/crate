@@ -46,8 +46,14 @@ pipe them through the script, report the summary + anything that missed.
 
 `src/` is a Vite + React app (patterned after `~/Projects/workout`): all state
 in `App.jsx`, Tidal knowledge isolated in `src/api/tidal.js`, deployed to
-GitHub Pages by `.github/workflows/deploy.yml`. Playback goes through the
-official `@tidal-music/player` SDK (requires `build.target: 'es2022'`).
+GitHub Pages by `.github/workflows/deploy.yml`.
+
+Playback is Tidal's embed widget in an iframe, and nothing else. The
+`@tidal-music/player` SDK is gone: it needs MediaSource, which iOS Safari
+doesn't have, and the preview-clip API answers 403 unless the app is
+production-approved — so every in-app path failed on the phone and the
+fallback machinery around them only made the failure look like a player.
+Don't reintroduce an in-app player without checking those two things first.
 
 Out of scope for trawl sessions: don't edit `src/`, don't remove tracks from
 the inbox, don't touch target playlists — reviewing is Anders' job in the app.
