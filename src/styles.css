@@ -159,6 +159,14 @@ code { font-size: 13px; word-break: break-all; }
 .big-emoji { font-size: 48px; margin: 0; }
 
 .player { display: flex; flex-direction: column; gap: 8px; }
+.progress-bar {
+  height: 4px;
+  background: #22222c;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-bar-fill { height: 100%; background: #5a7cff; transition: width 0.2s linear; }
+.stopwatch { font-variant-numeric: tabular-nums; color: #9a9aa8; font-size: 13px; }
 
 .undo { align-self: center; }
 

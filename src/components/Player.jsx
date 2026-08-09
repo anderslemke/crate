@@ -1,39 +1,138 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
-// Tidal's own embed widget, and nothing around it.
-//
-// There used to be an in-app player here, with a preview-clip fallback under
-// it and an autoplay unlock under that. None of it can work: Tidal serves
-// playback only through its SDKs, that SDK needs MediaSource (absent in iOS
-// Safari), and the preview endpoint the fallback used sits outside the
-// developer platform and 403s for everyone. What the machinery produced was
-// a transport that looked like it worked.
+const fmt = (s) =>
+  `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+const EMBED_ORIGIN = 'https://embed.tidal.com';
+
+// Tidal's embed, driven by postMessage — NOT by its own ▶, which does nothing
+// in this context. `{commandName: "play"|"pause"}` goes in, `{currentTime,
+// duration, paused}` comes back. This is the only thing that has ever made
+// sound on the phone, so it stays even though everything else got stripped.
 //
 // Current and next card are both mounted, so a swipe promotes an iframe that
-// has already loaded. The outgoing one unmounts — which is also what stops
-// its audio, no remote control needed.
+// has already loaded; the outgoing one unmounts, which stops its audio.
 export default function Player({ track, next, inboxId }) {
+  const refs = useRef(new Map());
+  const [status, setStatus] = useState({
+    currentTime: 0,
+    duration: track.duration || 30,
+    paused: false,
+  });
+  // The user's intent, carried across swipes: playing → next card auto-plays,
+  // paused → next card stays quiet.
+  const wantPlay = useRef(true);
+
+  const send = (itemId, commandName) => {
+    refs.current
+      .get(itemId)
+      ?.contentWindow?.postMessage(JSON.stringify({ commandName }), EMBED_ORIGIN);
+  };
+
+  // Live progress from the visible embed only.
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== EMBED_ORIGIN) return;
+      if (e.source !== refs.current.get(track.itemId)?.contentWindow) return;
+      let d = e.data;
+      if (typeof d === 'string') {
+        try {
+          d = JSON.parse(d);
+        } catch {
+          return;
+        }
+      }
+      if (d && typeof d.currentTime === 'number') {
+        setStatus({
+          currentTime: d.currentTime,
+          duration: d.duration || track.duration || 30,
+          paused: !!d.paused,
+        });
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [track.itemId]);
+
+  // Card change: silence the outgoing embed; start the incoming one only if
+  // the user was in a playing state. (The swipe itself is the user gesture
+  // that lets autoplay through.)
+  useEffect(() => {
+    setStatus({
+      currentTime: 0,
+      duration: track.duration || 30,
+      paused: !wantPlay.current,
+    });
+    for (const id of refs.current.keys()) if (id !== track.itemId) send(id, 'pause');
+    if (wantPlay.current) send(track.itemId, 'play');
+  }, [track.itemId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Optimistic toggle: don't rely on the embed's status broadcasts to know
+  // whether it's playing — flip our own state and send the matching command;
+  // incoming broadcasts (when they arrive) overwrite it with the truth.
+  useEffect(() => {
+    const toggle = () => {
+      setStatus((s) => {
+        send(track.itemId, s.paused ? 'play' : 'pause');
+        wantPlay.current = s.paused;
+        return { ...s, paused: !s.paused };
+      });
+    };
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.key === ' ') {
+        e.preventDefault();
+        toggle();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('crate-toggle-play', toggle);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('crate-toggle-play', toggle);
+    };
+  }, [track.itemId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="player card">
       {[track, next].filter(Boolean).map((t) => (
         <iframe
           key={t.itemId}
+          ref={(el) => {
+            if (el) refs.current.set(t.itemId, el);
+            else refs.current.delete(t.itemId);
+          }}
           className="embed"
           style={t === track ? undefined : { display: 'none' }}
           title={`Tidal player ${t.title}`}
           src={`https://embed.tidal.com/tracks/${t.trackId}`}
-          // As Tidal documents it, plus autoplay.
           allow="autoplay *; encrypted-media *; fullscreen *; web-share *;"
+          onLoad={() => t === track && wantPlay.current && send(t.itemId, 'play')}
         />
       ))}
-      {/* The native app is the one thing that plays on a phone: the track for
-          a quick listen, the inbox to put the whole review session on in the
-          background and just swipe along.
-
-          These are https universal links, not the tidal:// scheme — iOS
-          refuses custom schemes from an ordinary link in enough cases to be
-          useless, and https is what the embed's own cover art uses, which is
-          the one link that has been observed to open the app from here. */}
+      <div className="progress-bar">
+        <div
+          className="progress-bar-fill"
+          style={{
+            width: status.duration
+              ? `${(status.currentTime / status.duration) * 100}%`
+              : 0,
+          }}
+        />
+      </div>
+      <div className="row">
+        <button
+          className="secondary compact"
+          onClick={() => window.dispatchEvent(new Event('crate-toggle-play'))}
+        >
+          {status.paused ? '▶' : '⏸'}
+        </button>
+        <span className="stopwatch">
+          {fmt(status.currentTime)} / {fmt(status.duration)}
+        </span>
+      </div>
+      {/* https universal links, not the tidal:// scheme — iOS declines custom
+          schemes from an ordinary link often enough to be useless. */}
       <div className="row player-links">
         <a className="applink" href={`https://tidal.com/track/${track.trackId}`}>
           ▶ This track in Tidal
