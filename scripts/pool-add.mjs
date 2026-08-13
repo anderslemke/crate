@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// Add tracks to the "Crate Inbox" Tidal playlist (the review pool).
+// Add tracks to the Crate review pool — the playlist the app drains.
 //
 // Usage:
 //   node scripts/pool-add.mjs "Artist - Title" ["Artist - Title" ...]
 //   node scripts/pool-add.mjs --id 251380837 [--id ...]
 //   echo "MK - Rhyme Dust\nDom Dolla - Saving Up" | node scripts/pool-add.mjs
+//
+// The pool defaults to "Crate Inbox". The app's source playlist is a setting,
+// so this is too: pass --playlist <name-or-id>, or set CRATE_SOURCE_PLAYLIST,
+// to fill whichever playlist the app is pointed at.
 //
 // Requires a one-time login: node scripts/tidal-login.mjs
 
@@ -12,7 +16,7 @@ import { getToken } from './tidal-login.mjs';
 
 const API = 'https://openapi.tidal.com/v2';
 const COUNTRY = 'DK';
-const INBOX_NAME = 'Crate Inbox';
+const DEFAULT_POOL = 'Crate Inbox';
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -72,19 +76,25 @@ async function search(token, query) {
   return mapTracks(j);
 }
 
-async function findInbox(token, userId) {
+// `wanted` is a playlist name or id, so a repointed source works either way.
+async function findPool(token, userId, wanted) {
   let path = `/playlists?filter[r.owners.id]=${userId}`;
   while (path) {
     const j = await api(token, path);
-    const hit = (j.data || []).find((p) => p.attributes?.name === INBOX_NAME);
-    if (hit) return hit.id;
+    const hit = (j.data || []).find(
+      (p) => p.id === wanted || p.attributes?.name === wanted,
+    );
+    if (hit) return { id: hit.id, name: hit.attributes?.name || wanted };
     path = j.links?.next || null;
   }
-  console.error(`No "${INBOX_NAME}" playlist found — open the Crate app once to create it.`);
+  console.error(
+    `No playlist "${wanted}" found — open the Crate app once to create it, ` +
+      'or name the right one with --playlist.',
+  );
   process.exit(1);
 }
 
-async function inboxTrackIds(token, playlistId) {
+async function poolTrackIds(token, playlistId) {
   const ids = new Set();
   let path = `/playlists/${playlistId}/relationships/items`;
   while (path) {
@@ -99,8 +109,10 @@ async function main() {
   const args = process.argv.slice(2);
   const queries = [];
   const directIds = [];
+  let pool = process.env.CRATE_SOURCE_PLAYLIST || DEFAULT_POOL;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--id') directIds.push(args[++i]);
+    else if (args[i] === '--playlist') pool = args[++i];
     else if (!args[i].startsWith('--')) queries.push(args[i]);
   }
   if (!queries.length && !directIds.length && !process.stdin.isTTY) {
@@ -117,8 +129,9 @@ async function main() {
   }
 
   const t = await getToken();
-  const inboxId = await findInbox(t.accessToken, t.userId);
-  const existing = await inboxTrackIds(t.accessToken, inboxId);
+  const { id: poolId, name: poolName } = await findPool(t.accessToken, t.userId, pool);
+  const existing = await poolTrackIds(t.accessToken, poolId);
+  console.log(`Filling “${poolName}”\n`);
 
   let added = 0,
     skipped = 0,
@@ -126,11 +139,11 @@ async function main() {
 
   const addId = async (id, label) => {
     if (existing.has(String(id))) {
-      console.log(`SKIP (already in inbox): ${label}`);
+      console.log(`SKIP (already in pool): ${label}`);
       skipped++;
       return;
     }
-    await api(t.accessToken, `/playlists/${inboxId}/relationships/items`, {
+    await api(t.accessToken, `/playlists/${poolId}/relationships/items`, {
       method: 'POST',
       body: JSON.stringify({ data: [{ id: String(id), type: 'tracks' }] }),
     });

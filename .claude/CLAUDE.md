@@ -5,13 +5,19 @@ reviews a pool of candidate tracks card by card: swipe right = add to the
 target (occasion) playlist, swipe left = dismiss. Everything lives in Tidal —
 there is no local database:
 
-- The pool is the Tidal playlist **"Crate Inbox"**. Draining it is the app's job.
-- Target playlists are ordinary Tidal playlists, one per DJ occasion.
-- Dismissing moves the track to the playlist **"Crate Dismissed"** — that's the
-  dismiss history. Nothing reads it back yet, so a track that gets re-added to
-  the inbox will still be reviewed again.
-- Both Crate-owned playlists are created on first run and hidden from the
-  target-playlist picker.
+All three playlists involved are settings, picked in the app under ⚙ (source
+and dismiss) and in the header (target); the chosen ids live in localStorage:
+
+- **Source** — the pool the app drains, created as **"Crate Inbox"** on first
+  run if nothing is configured.
+- **Target** — an ordinary Tidal playlist, one per DJ occasion.
+- **Dismiss** — where a left swipe files the track, created as **"Crate
+  Dismissed"** on first run. It can be left empty, in which case dismissed
+  tracks are just removed from the source. Nothing reads it back either way, so
+  a track that gets re-added to the source will be reviewed again.
+
+A playlist can only hold one role at a time, so each picker hides the two
+playlists already spoken for.
 
 ## Adding tracks to the pool (the main agent job)
 
@@ -24,9 +30,13 @@ printf 'MK - Rhyme Dust\nDom Dolla - Saving Up\n' | node scripts/pool-add.mjs
 node scripts/pool-add.mjs --id 251380837        # when you already have the ID
 ```
 
+It fills "Crate Inbox" unless told otherwise — if Anders has pointed the app's
+source at another playlist, name it with `--playlist "<name-or-id>"` (or
+`CRATE_SOURCE_PLAYLIST`); the script prints which playlist it's filling.
+
 The script searches Tidal, prints what it matched (sanity-check the artist and
 duration in the output — report mismatches to Anders), skips tracks already in
-the inbox, and prints an added/skipped/missed summary. Relay that summary.
+the pool, and prints an added/skipped/missed summary. Relay that summary.
 
 Typical trawl workflow: web-search a chart (e.g. "Beatport tech house top 100",
 DR's P3 playlist, Tidal's own viral lists), extract "Artist - Title" lines,
@@ -65,4 +75,5 @@ unlock, a persisted gate, a postMessage transport) only made failure look
 like playback; don't bring it back.
 
 Out of scope for trawl sessions: don't edit `src/`, don't remove tracks from
-the inbox, don't touch target playlists — reviewing is Anders' job in the app.
+the source playlist, don't touch target playlists — reviewing is Anders' job in
+the app.

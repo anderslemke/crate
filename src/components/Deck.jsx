@@ -22,7 +22,7 @@ function CardBody({ track, canAdd }) {
   );
 }
 
-export default function Deck({ queue, onSwipe, session, onRefresh, canAdd }) {
+export default function Deck({ queue, onSwipe, session, onRefresh, canAdd, sourceName }) {
   const [drag, setDrag] = useState(null); // {dx, dy} while dragging
   const [leaving, setLeaving] = useState(null); // {item, dir} during exit anim
   const start = useRef(null);
@@ -57,10 +57,16 @@ export default function Deck({ queue, onSwipe, session, onRefresh, canAdd }) {
     return (
       <div className="card deck-empty">
         <p className="big-emoji">📭</p>
-        <p>Inbox empty.</p>
+        <p>{sourceName ? `${sourceName} is empty.` : 'No source playlist picked.'}</p>
         <p className="muted">
-          Add tracks to “Crate Inbox” from the Tidal app, or ask Claude to trawl
-          some charts.
+          {sourceName ? (
+            <>
+              Add tracks to “{sourceName}” from the Tidal app, or ask Claude to
+              trawl some charts.
+            </>
+          ) : (
+            <>Choose the playlist to review under ⚙ above.</>
+          )}
         </p>
         <p className="muted small">
           This session: {session.added} added · {session.dismissed} dismissed

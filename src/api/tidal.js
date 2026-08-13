@@ -17,8 +17,28 @@ export const setClientId = (id) => localStorage.setItem('crate_client_id', id.tr
 const SCOPES = ['user.read', 'playlists.read', 'playlists.write', 'playback'];
 const API = 'https://openapi.tidal.com/v2';
 const COUNTRY = 'DK';
-export const INBOX_NAME = 'Crate Inbox';
-export const DISMISSED_NAME = 'Crate Dismissed';
+
+// Crate works with three playlists, and each of them is a setting: the source
+// it drains, the target it files keepers in, and the dismissed pile. These are
+// only the names the source and dismissed roles get when they're created on
+// first run — after that the ids below are what count, so renaming or
+// repointing them in the app is fine.
+export const DEFAULT_SOURCE_NAME = 'Crate Inbox';
+export const DEFAULT_DISMISS_NAME = 'Crate Dismissed';
+
+export const ROLES = ['source', 'target', 'dismiss'];
+const ROLE_KEYS = {
+  source: 'crate_inbox',
+  target: 'crate_playlist',
+  dismiss: 'crate_dismissed',
+};
+// A role deliberately left empty. Stored rather than cleared, so boot knows
+// the difference between "never configured" (create a default) and "switched
+// off on purpose" (leave it off).
+export const NONE = 'none';
+
+export const getRoleId = (role) => localStorage.getItem(ROLE_KEYS[role]) || '';
+export const setRoleId = (role, id) => localStorage.setItem(ROLE_KEYS[role], id || NONE);
 
 const redirectUri = () => window.location.origin + import.meta.env.BASE_URL;
 
@@ -211,33 +231,35 @@ export async function getPreviewUrl(creds, trackId) {
 
 // --- Playlists ---
 
-// One of Crate's own playlists: found by cached id first (so a rename in
-// Tidal doesn't orphan it), then by name, and created if it's missing.
-async function ensureOwnPlaylist(creds, playlists, name, cacheKey) {
-  const cached = localStorage.getItem(cacheKey);
+// Resolve one role to a playlist: the configured id wins (so a rename in
+// Tidal doesn't orphan it), then a playlist carrying the default name, and
+// failing both we create one. `defaultName` null means the role has no default
+// — it stays empty until it's picked.
+async function resolveRole(creds, playlists, role, defaultName) {
+  const configured = getRoleId(role);
+  if (configured === NONE) return null;
   const found =
-    (cached && playlists.find((p) => p.id === cached)) ||
-    playlists.find((p) => p.name === name);
-  const playlist = found || (await createPlaylist(creds, name));
-  localStorage.setItem(cacheKey, playlist.id);
+    (configured && playlists.find((p) => p.id === configured)) ||
+    (defaultName && playlists.find((p) => p.name === defaultName));
+  if (!found && !defaultName) return null;
+  const playlist = found || (await createPlaylist(creds, defaultName));
+  setRoleId(role, playlist.id);
   return playlist;
 }
 
-// The two playlists Crate owns — the inbox it drains and the graveyard it
-// files dismissals in — plus the rest, which are the possible targets.
-export async function ensureCratePlaylists(creds) {
+// Every playlist Anders owns, plus which one currently plays each role.
+// Source and dismissed get created on first run so there's something to start
+// from; the target is his pick, and all three can be repointed afterwards.
+export async function loadCrateConfig(creds) {
   const playlists = await getMyPlaylists(creds);
-  const inbox = await ensureOwnPlaylist(creds, playlists, INBOX_NAME, 'crate_inbox');
-  const dismissed = await ensureOwnPlaylist(
-    creds,
-    playlists,
-    DISMISSED_NAME,
-    'crate_dismissed',
-  );
-  return {
-    inbox,
-    dismissed,
-    playlists: playlists.filter((p) => p.id !== inbox.id && p.id !== dismissed.id),
-  };
+  const source = await resolveRole(creds, playlists, 'source', DEFAULT_SOURCE_NAME);
+  const dismiss = await resolveRole(creds, playlists, 'dismiss', DEFAULT_DISMISS_NAME);
+  const target = await resolveRole(creds, playlists, 'target', null);
+  // A role we just created isn't in the fetched list yet, and the pickers need
+  // to be able to show it.
+  for (const p of [source, dismiss]) {
+    if (p && !playlists.some((x) => x.id === p.id)) playlists.push(p);
+  }
+  return { playlists, source, dismiss, target };
 }
 
