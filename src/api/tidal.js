@@ -77,17 +77,29 @@ export async function getUserCredentials() {
   }
 }
 
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
 async function api(path, { method = 'GET', body, token } = {}) {
   const sep = path.includes('?') ? '&' : '?';
-  const r = await fetch(`${API}${path}${sep}countryCode=${COUNTRY}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/vnd.api+json',
-      Accept: 'application/vnd.api+json',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let r;
+  for (let attempt = 1; ; attempt++) {
+    r = await fetch(`${API}${path}${sep}countryCode=${COUNTRY}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/vnd.api+json',
+        Accept: 'application/vnd.api+json',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    // Rate limited (429) or a transient server error: back off and retry a
+    // few times before giving up, same as scripts/pool-add.mjs does.
+    if ((r.status === 429 || r.status >= 500) && attempt < 4) {
+      await sleep(Number(r.headers.get('retry-after')) * 1000 || attempt * 2000);
+      continue;
+    }
+    break;
+  }
   if (!r.ok) {
     const text = await r.text();
     const err = new Error(`${method} ${path}: ${r.status} ${text}`);
@@ -139,14 +151,20 @@ export async function createPlaylist(creds, name) {
   return { id: j.data.id, name: j.data.attributes?.name || name, numberOfItems: 0 };
 }
 
-// All items of a playlist, with track attributes resolved from `included`.
-// Returns [{trackId, itemId, title, artist, album, duration}]
-export async function getPlaylistItems(creds, playlistId) {
-  const out = [];
-  const included = new Map(); // "type/id" -> resource
-  let path = `/playlists/${playlistId}/relationships/items?include=items,items.artists,items.albums`;
-  while (path) {
-    const j = await api(path, { token: creds.token });
+// One page of a playlist (Tidal hands out ~20 items per page), with track
+// attributes resolved from `included`. `path` is the cursor returned as `next`
+// by the previous call; omit it for the first page. `next` is null on the last.
+// Pages holding only videos are skipped over, so `items` is empty only at the
+// end of the playlist.
+// Returns { items: [{trackId, itemId, title, artist, album, duration}], next }
+export async function getPlaylistItemsPage(creds, playlistId, path) {
+  const items = [];
+  let next =
+    path ||
+    `/playlists/${playlistId}/relationships/items?include=items,items.artists,items.albums`;
+  while (next && items.length === 0) {
+    const j = await api(next, { token: creds.token });
+    const included = new Map(); // "type/id" -> resource
     for (const res of j.included || []) included.set(`${res.type}/${res.id}`, res);
     for (const ref of j.data || []) {
       if (ref.type !== 'tracks') continue; // skip videos for now
@@ -159,7 +177,7 @@ export async function getPlaylistItems(creds, playlistId) {
       const albumName = (track?.relationships?.albums?.data || [])
         .map((al) => included.get(`albums/${al.id}`)?.attributes?.title)
         .filter(Boolean)[0];
-      out.push({
+      items.push({
         trackId: ref.id,
         itemId: ref.meta?.itemId,
         title: a.title || `Track ${ref.id}`,
@@ -168,8 +186,22 @@ export async function getPlaylistItems(creds, playlistId) {
         duration: parseIsoDuration(a.duration),
       });
     }
-    path = j.links?.next || null;
+    next = j.links?.next || null;
   }
+  return { items, next };
+}
+
+// All items of a playlist. One request per page, so keep this to playlists
+// that have to be scanned whole (undo looks a track up by id); the review
+// queue pages lazily with getPlaylistItemsPage instead.
+export async function getPlaylistItems(creds, playlistId) {
+  const out = [];
+  let next = null;
+  do {
+    const page = await getPlaylistItemsPage(creds, playlistId, next);
+    out.push(...page.items);
+    next = page.next;
+  } while (next);
   return out;
 }
 

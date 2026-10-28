@@ -7,6 +7,7 @@ import {
   loadCrateConfig,
   setRoleId,
   getPlaylistItems,
+  getPlaylistItemsPage,
   addToPlaylist,
   removeFromPlaylist,
   createPlaylist,
@@ -16,6 +17,9 @@ import PlaylistPicker from './components/PlaylistPicker.jsx';
 import Deck from './components/Deck.jsx';
 import Player from './components/Player.jsx';
 
+// Fetch the next page of the source when this few cards are left loaded.
+const LOW_WATER = 6;
+
 export default function App() {
   const [stage, setStage] = useState('boot'); // boot | setup | login | loading | ready
   const [creds, setCreds] = useState(null);
@@ -24,6 +28,14 @@ export default function App() {
   // api/tidal.js; source and dismiss come with defaults, target is a pick.
   const [roles, setRoles] = useState({ source: '', target: '', dismiss: '' });
   const [queue, setQueue] = useState([]); // pending items, [0] is the open card
+  // Cursor to the next unfetched page of the source ({gen, path}), null once
+  // it's drained.
+  // The queue is filled a page at a time: Anders meets the tracks one by one,
+  // so there is no point in fetching a big inbox whole (and doing so trips
+  // Tidal's rate limit).
+  const [next, setNext] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadGen = useRef(0); // bumped whenever the queue restarts from page one
   const [session, setSession] = useState({ added: 0, dismissed: 0 });
   const [undoStack, setUndoStack] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -58,41 +70,76 @@ export default function App() {
     boot();
   }, [boot]);
 
-  // The queue is simply the source playlist's contents, so it reloads whenever
-  // the source does — at boot, and again if it's repointed in the settings.
-  useEffect(() => {
-    if (!creds) return;
-    if (!roles.source) {
-      setQueue([]);
-      setStage('ready');
-      return;
-    }
-    let live = true;
-    setStage('loading');
-    (async () => {
-      try {
-        const items = await getPlaylistItems(creds, roles.source);
-        if (live) setQueue(items);
-      } catch (e) {
-        if (live) setErr(String(e.message || e));
-      }
-      if (live) setStage('ready');
-    })();
-    return () => {
-      live = false;
-    };
-  }, [creds, roles.source]);
-
-  const refresh = useCallback(async () => {
-    if (!credsRef.current || !roles.source) return;
+  // Start the queue over from the first page of `source`. Any page fetch that
+  // was in flight for an older generation is dropped when it lands.
+  const loadFirstPage = useCallback(async (source) => {
+    const gen = ++loadGen.current;
+    setQueue([]);
+    setNext(null);
+    setLoadingMore(false);
     setStage('loading');
     try {
-      setQueue(await getPlaylistItems(credsRef.current, roles.source));
+      const page = await getPlaylistItemsPage(credsRef.current, source);
+      if (gen !== loadGen.current) return;
+      setQueue(page.items);
+      setNext(page.next ? { gen, path: page.next } : null);
     } catch (e) {
+      if (gen !== loadGen.current) return;
       setErr(String(e.message || e));
     }
     setStage('ready');
-  }, [roles.source]);
+  }, []);
+
+  // The queue is the source playlist's contents, so it restarts whenever the
+  // source does — at boot, and again if it's repointed in the settings.
+  useEffect(() => {
+    if (!creds) return;
+    if (!roles.source) {
+      loadGen.current++;
+      setQueue([]);
+      setNext(null);
+      setStage('ready');
+      return;
+    }
+    loadFirstPage(roles.source);
+  }, [creds, roles.source, loadFirstPage]);
+
+  // Top up: fetch the next page once the loaded cards run low. One fetch at a
+  // time; the page is appended behind whatever is still in the queue. The
+  // cursor remembers which generation it belongs to, so a cursor left over
+  // from the previous source is never followed.
+  useEffect(() => {
+    if (!next || next.gen !== loadGen.current) return;
+    if (loadingMore || queue.length >= LOW_WATER) return;
+    const { gen, path } = next;
+    setLoadingMore(true);
+    (async () => {
+      try {
+        const page = await getPlaylistItemsPage(credsRef.current, roles.source, path);
+        if (gen !== loadGen.current) return;
+        // Undo re-adds a track at the end of the source, so it can turn up a
+        // second time on the last page while still sitting in the queue.
+        setQueue((q) => {
+          const seen = new Set(q.map((i) => i.itemId));
+          return [...q, ...page.items.filter((i) => !seen.has(i.itemId))];
+        });
+        setNext(page.next ? { gen, path: page.next } : null);
+      } catch (e) {
+        if (gen !== loadGen.current) return;
+        setErr(String(e.message || e));
+        // Drop the cursor rather than retry in a loop; Refresh starts over from
+        // page one, which is always the next unreviewed tracks anyway.
+        setNext(null);
+      }
+      if (gen === loadGen.current) setLoadingMore(false);
+    })();
+  }, [next, loadingMore, queue.length, roles.source]);
+
+  const refresh = useCallback(() => {
+    if (!credsRef.current || !roles.source) return;
+    setErr('');
+    loadFirstPage(roles.source);
+  }, [roles.source, loadFirstPage]);
 
   const pickRole = (role, id) => {
     setErr('');
@@ -217,7 +264,7 @@ export default function App() {
         roles={roles}
         onPick={pickRole}
         onCreate={onCreatePlaylist}
-        count={queue.length}
+        count={next ? `${queue.length}+` : queue.length}
       />
       {err && <div className="error">{err}</div>}
       {stage === 'loading' ? (
@@ -229,6 +276,7 @@ export default function App() {
             onSwipe={swipe}
             session={session}
             onRefresh={refresh}
+            loading={loadingMore || !!next}
             canAdd={!!roles.target}
             sourceName={sourceName}
           />
