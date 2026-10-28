@@ -22,7 +22,15 @@ function CardBody({ track, canAdd }) {
   );
 }
 
-export default function Deck({ queue, onSwipe, session, onRefresh, canAdd, sourceName }) {
+export default function Deck({
+  queue,
+  onSwipe,
+  session,
+  onRefresh,
+  loading,
+  canAdd,
+  sourceName,
+}) {
   const [drag, setDrag] = useState(null); // {dx, dy} while dragging
   const [leaving, setLeaving] = useState(null); // {item, dir} during exit anim
   const start = useRef(null);
@@ -52,6 +60,11 @@ export default function Deck({ queue, onSwipe, session, onRefresh, canAdd, sourc
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  // Out of loaded cards but the source has more pages: App is fetching them.
+  if (!top && !leaving && loading) {
+    return <div className="card deck-empty muted">Loading more…</div>;
+  }
 
   if (!top && !leaving) {
     return (
