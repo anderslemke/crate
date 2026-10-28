@@ -69,9 +69,11 @@ function mapTracks(j) {
 }
 
 async function search(token, query) {
+  // Tidal moved search to a filter param (autumn 2026); the path form now 400s.
+  const q = query.replace(/\s+-\s+/g, " ");
   const j = await api(
     token,
-    `/searchResults/${encodeURIComponent(query)}?include=tracks,tracks.artists`,
+    `/searchResults?filter[query]=${encodeURIComponent(q)}&include=tracks,tracks.artists`,
   );
   return mapTracks(j);
 }
@@ -167,7 +169,13 @@ async function main() {
       results.find(
         (r) => nq.includes(norm(r.title)) && r.artist && nq.includes(norm(r.artist).split(' ')[0]),
       ) ||
-      results[0];
+      null;
+    if (!best) {
+      // Never fall back to the first hit: a wrong track in the inbox costs more than a miss.
+      console.log(`MISS (no good match): ${q}  -- top hit: ${results[0].artist} - ${results[0].title}`);
+      missed++;
+      continue;
+    }
     await addId(best.id, `${best.artist} - ${best.title} (${best.duration}) [for: ${q}]`);
   }
 
