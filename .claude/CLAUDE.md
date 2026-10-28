@@ -19,6 +19,13 @@ and dismiss) and in the header (target); the chosen ids live in localStorage:
 A playlist can only hold one role at a time, so each picker hides the two
 playlists already spoken for.
 
+## Shipping changes
+
+Anders is the only user and the only developer. Commit straight to `main` and
+push — no feature branches, no pull requests, no review round. A push to
+`main` is what deploys the app (`.github/workflows/deploy.yml`), so pushing
+is the deliverable; say in one line what went out.
+
 ## Adding tracks to the pool (the main agent job)
 
 Trawl charts/top-lists for candidates, then add them ONLY via the script —
